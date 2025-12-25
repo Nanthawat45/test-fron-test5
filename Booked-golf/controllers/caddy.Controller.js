@@ -130,25 +130,54 @@ export const markCaddyAsAvailable = async (req, res) => {
     }
 
     // 2. ตรวจสอบ: แคดดี้ที่ล็อกอินอยู่ได้รับมอบหมายให้กับการจองนี้หรือไม่
-    if (booking.caddy && !booking.caddy.map(id => id.toString()).includes(caddyId.toString())) {
+    if (
+      booking.caddy &&
+      !booking.caddy.map((id) => id.toString()).includes(caddyId.toString())
+    ) {
       return res.status(403).json({ message: "You are not assigned to this booking." });
     }
 
-    // 3. เปลี่ยนสถานะของ Golf Carts และ Golf Bags จาก 'booked' เป็น 'available'
-    const bookedAssetIds = [...(booking.bookedGolfCarIds || []), ...(booking.bookedGolfBagIds || [])];
+    // 3. เปลี่ยนสถานะของ Golf Carts และ Golf Bags เป็น 'available'
+    const bookedAssetIds = [
+      ...(booking.bookedGolfCarIds || []),
+      ...(booking.bookedGolfBagIds || []),
+    ];
     if (bookedAssetIds.length > 0) {
-      await updateItemStatus(bookedAssetIds, 'available');
+      await updateItemStatus(bookedAssetIds, "available");
     }
-    const updatedCaddy = await updateCaddyStatus(caddyId, 'available');
 
-    res.status(200).json({
-      message: "Caddy and related assets are now available.",
+    // 4) เปลี่ยนสถานะของแคดดี้เป็น available (ของเดิมคุณ)
+    const updatedCaddy = await updateCaddyStatus(caddyId, "available");
+
+    // 5) ✅ เคลียร์ state ที่ใช้กับ selectHole เพื่อเริ่มรอบใหม่ได้
+    const caddyDoc = await Caddy.findOne({ caddy_id: caddyId });
+    if (caddyDoc) {
+      const lastHole = caddyDoc.currentHole;
+
+      // (optional) ถ้าอยากล้าง report ที่หลุมล่าสุดด้วย (กันข้อมูลค้างบนหลุม)
+      if (lastHole) {
+        await Hole.updateOne(
+          { holeNumber: lastHole },
+          { $pull: { caddyReports: { caddyId } } }
+        );
+      }
+
+      caddyDoc.activeBookingId = null;
+      caddyDoc.currentHole = null;
+      caddyDoc.rounds = 0;
+      await caddyDoc.save();
+    }
+
+    return res.status(200).json({
+      message: "Caddy and related assets are now available. State cleared.",
       caddy: updatedCaddy,
+      clearedState: true,
     });
-
   } catch (error) {
-    console.error("Failed to start round:", error);
-    res.status(400).json({ error: error.message || "Failed to start round." });
+    console.error("Failed to mark caddy available:", error);
+    return res
+      .status(400)
+      .json({ error: error.message || "Failed to mark caddy available." });
   }
 };
 
@@ -410,6 +439,9 @@ export const selectHole = async (req, res) => {
   const { bookingId, holeNumber } = req.body;
   const userId = req.user?._id;
 
+  // -------------------------------
+  // 0) validate input
+  // -------------------------------
   if (!bookingId || !holeNumber) {
     return res.status(400).json({ message: "กรุณาส่ง bookingId และ holeNumber" });
   }
@@ -417,17 +449,27 @@ export const selectHole = async (req, res) => {
     return res.status(400).json({ message: "bookingId ไม่ถูกต้อง" });
   }
 
-  const hn = Number(holeNumber);
-  if (!Number.isFinite(hn) || hn < 1 || hn > 18) {
+  const nextHole = Number(holeNumber);
+  if (!Number.isFinite(nextHole) || nextHole < 1 || nextHole > 18) {
     return res.status(400).json({ message: "holeNumber ต้องอยู่ระหว่าง 1-18" });
   }
 
   try {
-    // 1) ดึง booking + caddy
+    // -------------------------------
+    // 1) ดึง booking + ตรวจสถานะ
+    // -------------------------------
     const booking = await Booking.findById(bookingId).populate("caddy", "name fullName");
-    if (!booking) return res.status(404).json({ message: "ไม่พบ booking" });
+    if (!booking) {
+      return res.status(404).json({ message: "ไม่พบ booking" });
+    }
 
-    // 2) เช็คว่าคนกดเป็น caddy ใน booking จริง
+    if (booking.status !== "onGoing") {
+      return res.status(400).json({ message: "ยังไม่เริ่มรอบ (booking ต้องเป็น onGoing)" });
+    }
+
+    // -------------------------------
+    // 2) ตรวจว่า user เป็น caddy ของ booking
+    // -------------------------------
     const isInBooking = (booking.caddy || []).some(
       (u) => String(u?._id || u) === String(userId)
     );
@@ -435,88 +477,148 @@ export const selectHole = async (req, res) => {
       return res.status(403).json({ message: "คุณไม่ได้อยู่ในรายการแคดดี้ของ booking นี้" });
     }
 
-    // 3) ต้องเริ่มรอบแล้ว (คุณมี startRound อยู่แล้ว)
-    if (booking.status !== "onGoing") {
-      return res.status(400).json({ message: "ยังไม่เริ่มรอบ (booking ต้องเป็น onGoing)" });
+    // -------------------------------
+    // 3) โหลด state ของ Caddy
+    // -------------------------------
+    const caddyDoc = await Caddy.findOne({ caddy_id: userId });
+    if (!caddyDoc) {
+      return res.status(404).json({ message: "ไม่พบข้อมูล Caddy" });
     }
 
-    // 4) หา hole
-    const hole = await Hole.findOne({ holeNumber: hn });
-    if (!hole) return res.status(404).json({ message: "ไม่พบหลุมนี้ (ต้องสร้าง Hole 1-18 ก่อน)" });
-
-    // 5) กัน booking อื่นมาเขียนทับ (ยังคงกันไว้)
-    //    แต่ถ้าเป็น booking เดียวกัน → อนุญาต (เพื่อให้ caddy คนอื่นรายงานได้)
-    if (hole.bookingId && String(hole.bookingId) !== String(booking._id)) {
-      return res.status(400).json({ message: "หลุมนี้ถูกใช้งานโดย Booking อื่น" });
+    // กันกดข้าม booking (แนะนำให้คงไว้)
+    if (
+      caddyDoc.activeBookingId &&
+      String(caddyDoc.activeBookingId) !== String(booking._id)
+    ) {
+      return res.status(400).json({ message: "คุณกำลังทำงานกับ booking อื่นอยู่" });
     }
 
-    // 6) ถ้ายังไม่เคยผูก bookingId กับหลุมนี้ → set snapshot ครั้งแรก
-    if (!hole.bookingId) {
-      const caddyIds = (booking.caddy || []).map((u) => u._id || u);
-      const caddyNames = (booking.caddy || [])
-        .map((u) => u?.name || u?.fullName)
-        .filter(Boolean);
+    const prevHole = caddyDoc.currentHole; // null ถ้ายังไม่เคยเลือก
+    const rounds = Number(caddyDoc.rounds || 0);
 
-      hole.bookingId = booking._id;
-      hole.groupName = booking.groupName;
-      hole.caddies = caddyIds;
-      hole.caddyNames = caddyNames;
-      hole.golfCarQty = Number(booking.golfCar || 0);
-      hole.golfBagQty = Number(booking.golfBag || 0);
-
-      // ✅ ไม่เปลี่ยน status ไป editing (ปล่อย open)
-      hole.status = "open";
-    } else {
-      // ✅ ถ้าหลุมนี้ status ไม่ใช่ open ก็ “คืนค่าเป็น open” เพื่อกันเลือกไม่ได้
-      if (hole.status !== "open") hole.status = "open";
+    // -------------------------------
+    // 4) กดหลุมเดิมซ้ำ → ไม่นับ
+    // -------------------------------
+    if (prevHole === nextHole) {
+      return res.status(200).json({
+        message: "คุณอยู่หลุมนี้อยู่แล้ว (ไม่นับรอบ)",
+        data: { currentHole: prevHole, rounds },
+      });
     }
 
-    // 7) ✅ รายงานตำแหน่ง: ให้ 1 caddy มี “ตำแหน่งล่าสุด” ที่หลุมนั้น
-    //    (ถ้าคุณอยากให้เก็บประวัติหลายรายการต่อคน -> เอา filter ออกได้)
-    hole.caddyReports = (hole.caddyReports || []).filter(
+    // -------------------------------
+    // 5) จำกัดจำนวนครั้งตาม courseType
+    // -------------------------------
+    const maxMoves = booking.courseType === "9" ? 9 : 18;
+    if (rounds >= maxMoves) {
+      return res.status(400).json({
+        message: `ครบ ${maxMoves} หลุมแล้ว ไม่สามารถเปลี่ยนหลุมต่อได้`,
+        data: { currentHole: prevHole, rounds, maxMoves },
+      });
+    }
+
+    // -------------------------------
+    // 6) เตรียม snapshot จาก booking
+    // -------------------------------
+    const caddyNames = (booking.caddy || [])
+      .map((u) => u?.name || u?.fullName)
+      .filter(Boolean);
+
+    const snapshot = {
+      bookingId: booking._id,
+      groupName: booking.groupName,
+      caddyNames,
+      golfCarQty: Number(booking.golfCar || 0),
+      golfBagQty: Number(booking.golfBag || 0),
+    };
+
+    // -------------------------------
+    // 7) ถ้ามี prevHole → บันทึกลงหลุมเดิม + รีเซ็ต report ของ caddy คนนี้
+    // -------------------------------
+    if (prevHole) {
+      const prev = await Hole.findOne({ holeNumber: prevHole });
+      if (!prev) {
+        return res.status(404).json({ message: `ไม่พบหลุม ${prevHole}` });
+      }
+
+      // บันทึก snapshot ลงหลุมเดิม (ตาม requirement: ออกจากหลุมไหน บันทึกลงหลุมนั้น)
+      prev.bookingId = snapshot.bookingId;
+      prev.groupName = snapshot.groupName;
+      prev.caddyNames = snapshot.caddyNames;
+      prev.golfCarQty = snapshot.golfCarQty;
+      prev.golfBagQty = snapshot.golfBagQty;
+      prev.status = "open";
+
+      // รีเซ็ต: เอา caddy คนนี้ออกจากหลุมเดิม เพื่อไม่ให้ค้าง
+      prev.caddyReports = (prev.caddyReports || []).filter(
+        (r) => String(r.caddyId) !== String(userId)
+      );
+
+      // ถ้าไม่มีใครเหลือ → ล้างข้อมูลหลุม (เพื่อไม่ให้โชว์กลุ่มค้าง)
+      if ((prev.caddyReports || []).length === 0) {
+        prev.bookingId = null;
+        prev.groupName = undefined;
+        prev.caddyNames = [];
+        prev.golfCarQty = 0;
+        prev.golfBagQty = 0;
+        prev.status = "open";
+      }
+
+      await prev.save();
+    }
+
+    // -------------------------------
+    // 8) ✅ หลุมใหม่: set snapshot ให้ครบ + ใส่ report ของ caddy คนนี้
+    //    (สำคัญสำหรับเคส 1 เพราะหน้า dashboard จะดึง /hole/gethole มาโชว์เลย)
+    // -------------------------------
+    const next = await Hole.findOne({ holeNumber: nextHole });
+    if (!next) {
+      return res.status(404).json({ message: `ไม่พบหลุม ${nextHole}` });
+    }
+
+    // set snapshot ลงหลุมใหม่ด้วย
+    next.bookingId = snapshot.bookingId;
+    next.groupName = snapshot.groupName;
+    next.caddyNames = snapshot.caddyNames;
+    next.golfCarQty = snapshot.golfCarQty;
+    next.golfBagQty = snapshot.golfBagQty;
+    next.status = "open";
+
+    // ใส่ report (เก็บล่าสุด 1 รายการ/หลุม/คน)
+    next.caddyReports = (next.caddyReports || []).filter(
       (r) => String(r.caddyId) !== String(userId)
     );
-
-    const me = (booking.caddy || []).find((u) => String(u._id) === String(userId));
-    const myName = me?.name || me?.fullName || "Caddy";
-
-    hole.caddyReports.push({
+    next.caddyReports.push({
       caddyId: userId,
-      caddyName: myName,
+      caddyName: caddyDoc.name || "Caddy",
       bookingId: booking._id,
       reportedAt: new Date(),
     });
 
-    await hole.save();
+    await next.save();
 
-    // 8) progress: นับ “จำนวนหลุมที่ booking นี้ไปแล้ว” (unique hole)
-    //    ตรงนี้ต้องนับจาก Hole ที่ bookingId = booking._id
-    const required = booking.courseType === "9" ? 9 : 18;
-    const selectedUnique = await Hole.countDocuments({ bookingId: booking._id });
-    const done = selectedUnique >= required;
+    // -------------------------------
+    // 9) อัปเดต state ของ Caddy
+    // -------------------------------
+    caddyDoc.currentHole = nextHole;
+    caddyDoc.rounds = rounds + 1;
+    caddyDoc.activeBookingId = booking._id;
+    await caddyDoc.save();
 
+    // -------------------------------
+    // 10) response
+    // -------------------------------
     return res.status(200).json({
-      message: "เลือกหลุมสำเร็จ",
+      message: "เปลี่ยนหลุมสำเร็จ",
       data: {
-        holeNumber: hn,
-        holeId: hole._id,
-        bookingId: booking._id,
-        snapshot: {
-          groupName: hole.groupName,
-          caddyNames: hole.caddyNames,
-          golfCarQty: hole.golfCarQty,
-          golfBagQty: hole.golfBagQty,
-          status: hole.status, // ✅ จะเป็น open
-        },
-        reported: {
-          caddyId: userId,
-          caddyName: myName,
-          reportedAt: hole.caddyReports[hole.caddyReports.length - 1].reportedAt,
-        },
-        progress: { selected: selectedUnique, required, done },
+        fromHole: prevHole || null,
+        toHole: nextHole,
+        rounds: caddyDoc.rounds,
+        maxMoves,
       },
     });
   } catch (err) {
+    console.error("selectHole error:", err);
     return res.status(500).json({ message: err?.message || "Server error" });
   }
 };

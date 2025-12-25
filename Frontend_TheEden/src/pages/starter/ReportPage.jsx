@@ -24,16 +24,18 @@ const ReportPage = () => {
   const [confirmData, setConfirmData] = useState(null);
   const [popup, setPopup] = useState(null);
 
-  const [holeLimit, setHoleLimit] = useState(18)
+  const [holeLimit, setHoleLimit] = useState(18);
 
   const fetchHoleStatuses = async () => {
     setLoadingHoles(true);
     setHolesError(null);
     try {
-      const { data } = await HoleService.getAllHoles(); // ✅ ใช้ service
+      const { data } = await HoleService.getAllHoles();
+
       const formatted = (data || []).map((h) => {
         let displayColor = "green";
         let displayStatus = "ใช้งานได้";
+
         if (h.status === "close" || h.status === "closed") {
           displayColor = "red";
           displayStatus = h?.description || "ปิดหลุม";
@@ -44,18 +46,33 @@ const ReportPage = () => {
           displayColor = "orange";
           displayStatus = h.status === "help_car" ? "ขอรถกอล์ฟช่วย" : "สลับรถแล้ว";
         }
+
+        // ✅ เพิ่มข้อมูลแบบ A: กลุ่ม + แคดดี้ที่อยู่หลุมนี้
+        const caddyHere = (h.caddyReports || [])
+          .map((r) => r?.caddyName)
+          .filter(Boolean);
+
         return {
           number: h.holeNumber ?? h.number ?? h?._id?.slice(-2),
           color: displayColor,
           status: displayStatus,
+
+          // ✅ เพิ่มเพื่อโชว์บนการ์ด
+          groupName: h.groupName || "",
+          caddyHere,
+          golfCarQty: Number(h.golfCarQty || 0),
+          golfBagQty: Number(h.golfBagQty || 0),
         };
       });
+
       setHoleStatuses(formatted);
     } catch (err) {
       setHoleStatuses([]);
       setHolesError(
         err?.response?.data?.message ||
-          (err?.response?.status === 401 ? "กรุณาเข้าสู่ระบบอีกครั้ง" : "ไม่สามารถดึงข้อมูลสถานะหลุมได้")
+          (err?.response?.status === 401
+            ? "กรุณาเข้าสู่ระบบอีกครั้ง"
+            : "ไม่สามารถดึงข้อมูลสถานะหลุมได้")
       );
     } finally {
       setLoadingHoles(false);
@@ -86,7 +103,7 @@ const ReportPage = () => {
         await HoleService.reportHelpCar({
           holeNumber: Number(holeNumber),
           description: description || "",
-          helpCarCount: Number(helpCarCount), // ✅ ส่งจำนวนรถเสีย
+          helpCarCount: Number(helpCarCount),
         });
       } else if (title === "สลับรถกอล์ฟให้กลุ่มนี้") {
         await HoleService.resolveGoCar({ holeNumber: Number(holeNumber) });
@@ -110,10 +127,16 @@ const ReportPage = () => {
             <FontAwesomeIcon icon={faExclamation} className="text-yellow-400 mb-4" style={{ fontSize: 48 }} />
             <h3 className="text-lg font-semibold mb-4">คุณแน่ใจหรือไม่?</h3>
             <div className="flex justify-center gap-4">
-              <button onClick={handleConfirm} className="bg-green-600 text-white px-6 py-2 rounded-full hover:bg-green-700">
+              <button
+                onClick={handleConfirm}
+                className="bg-green-600 text-white px-6 py-2 rounded-full hover:bg-green-700"
+              >
                 ตกลง
               </button>
-              <button onClick={() => setConfirmData(null)} className="bg-red-600 text-white px-6 py-2 rounded-full hover:bg-red-700">
+              <button
+                onClick={() => setConfirmData(null)}
+                className="bg-red-600 text-white px-6 py-2 rounded-full hover:bg-red-700"
+              >
                 ยกเลิก
               </button>
             </div>
@@ -121,6 +144,7 @@ const ReportPage = () => {
         </div>
       );
     }
+
     if (popup) {
       return (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -132,17 +156,21 @@ const ReportPage = () => {
             />
             <h2 className="text-3xl font-extrabold">{popup.isError ? "เกิดข้อผิดพลาด!" : "สำเร็จ!"}</h2>
             <h3 className="text-base font-normal text-gray-800">{popup.title}</h3>
-            <button onClick={() => setPopup(null)} className="mt-4 bg-gray-500 text-white px-6 py-2 rounded-full hover:bg-green-600">
+            <button
+              onClick={() => setPopup(null)}
+              className="mt-4 bg-gray-500 text-white px-6 py-2 rounded-full hover:bg-green-600"
+            >
               ตกลง
             </button>
           </div>
         </div>
       );
     }
+
     return null;
   };
 
-  // ✅ ปรับการ์ด: เพิ่ม showCount สำหรับ "ขอรถกอล์ฟช่วย"
+  // ✅ การ์ดแจ้งปัญหา (เดิม)
   const HoleCard = ({ color, title, ask, showIssue, showCount }) => {
     const [holeNumber, setHoleNumber] = useState("");
     const [issue, setIssue] = useState("");
@@ -182,7 +210,9 @@ const ReportPage = () => {
               onChange={(e) => setIssue(e.target.value)}
               className="w-full mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
             >
-              <option value="" disabled>-- กรุณาเลือกปัญหา --</option>
+              <option value="" disabled>
+                -- กรุณาเลือกปัญหา --
+              </option>
               <option value="ระบายน้ำ แฟร์เวย์">ระบายน้ำ แฟร์เวย์</option>
               <option value="ระบายน้ำกรีน">ระบายน้ำกรีน</option>
               <option value="ระบายน้ำบังเกอร์">ระบายน้ำบังเกอร์</option>
@@ -215,7 +245,7 @@ const ReportPage = () => {
               ask(title, {
                 holeNumber,
                 description: issue || "",
-                helpCarCount: showCount ? Number(count) : undefined, // ✅ ส่งเฉพาะตอนขอรถช่วย
+                helpCarCount: showCount ? Number(count) : undefined,
               })
             }
             className={`text-white text-sm px-4 py-1 rounded-full transition-colors ${
@@ -230,9 +260,6 @@ const ReportPage = () => {
     );
   };
 
-  // ✅ กรองรายการเฉพาะที่ “ไม่ใช่สีเขียว (ใช้งานได้)”
-  const problemHoleStatuses = holeStatuses.filter((h) => h.color !== "green");
-
   return (
     <div className="min-h-screen bg-white font-inter px-4 py-6">
       {/* ปุ่มย้อนกลับ */}
@@ -245,26 +272,26 @@ const ReportPage = () => {
         </button>
       </div>
 
-      {/* -------------------------------------------------------- */}
+      {/* เลือก 9/18 หลุม */}
       <div className="flex justify-center gap-4 mb-4">
-  <button
-    onClick={() => setHoleLimit(9)}
-    className={`px-6 py-2 rounded-full font-semibold
-      ${holeLimit === 9 ? "bg-green-600 text-white" : "bg-gray-200"}`}
-  >
-    9 หลุม
-  </button>
+        <button
+          onClick={() => setHoleLimit(9)}
+          className={`px-6 py-2 rounded-full font-semibold ${
+            holeLimit === 9 ? "bg-green-600 text-white" : "bg-gray-200"
+          }`}
+        >
+          9 หลุม
+        </button>
 
-  <button
-    onClick={() => setHoleLimit(18)}
-    className={`px-6 py-2 rounded-full font-semibold
-      ${holeLimit === 18 ? "bg-green-600 text-white" : "bg-gray-200"}`}
-  >
-    18 หลุม
-  </button>
-</div>
-{/* ---------------------------------------------------------- */}
-
+        <button
+          onClick={() => setHoleLimit(18)}
+          className={`px-6 py-2 rounded-full font-semibold ${
+            holeLimit === 18 ? "bg-green-600 text-white" : "bg-gray-200"
+          }`}
+        >
+          18 หลุม
+        </button>
+      </div>
 
       {/* แจ้งปัญหา */}
       <section className="max-w-6xl mx-auto">
@@ -279,42 +306,72 @@ const ReportPage = () => {
             <HoleCard title="แจ้งปิดหลุม" color="red" showIssue={true} showCount={false} ask={askHoleAction} />
             <HoleCard title="แจ้งสถานะกำลังแก้ไข" color="blue" showIssue={false} showCount={false} ask={askHoleAction} />
             <HoleCard title="แจ้งเปิดใช้งานหลุม" color="green" showIssue={false} showCount={false} ask={askHoleAction} />
-            {/* ✅ ขอรถกอล์ฟช่วย: ถ้าจะใช้งานให้เอา comment ออก */}
+            {/* ถ้าจะใช้ให้เอา comment ออก */}
             {/* <HoleCard title="ขอรถกอล์ฟช่วย" color="orange" showIssue={false} showCount={true} ask={askHoleAction} /> */}
-            <HoleCard title="สลับรถกอล์ฟให้กลุ่มนี้" color="yellow" showIssue={false} showCount={false} ask={askHoleAction} />
+            <HoleCard
+              title="สลับรถกอล์ฟให้กลุ่มนี้"
+              color="yellow"
+              showIssue={false}
+              showCount={false}
+              ask={askHoleAction}
+            />
           </div>
         </div>
       </section>
 
-      {/* สถานะหลุม (แสดงเฉพาะหลุมที่มีปัญหา) */}
+      {/* สถานะหลุม */}
       <section className="max-w-[75rem] mx-auto mt-8 px-1 sm:px-6">
         <h2 className="text-2xl font-extrabold mb-4 text-center text-gray-800">สถานะหลุมกอล์ฟ</h2>
+
         {loadingHoles ? (
           <div className="text-center text-lg text-gray-600 py-10">กำลังโหลดข้อมูล...</div>
         ) : holesError ? (
           <div className="text-center text-lg text-red-600 py-10">{holesError}</div>
         ) : (
           <div className="border-2 border-gray-400 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 shadow-md bg-white">
-{holeStatuses
-  .filter((h) => Number(h.number) <= holeLimit)
-  .map((h) => (
-    <div
-      key={h.number}
-      className="border rounded-lg p-2 bg-white shadow-sm text-center"
-    >
-      <div
-        className={`text-xs font-semibold px-2 py-0.5 mb-2 rounded-full text-white ${colorMap[h.color]}`}
-      >
-        หลุมที่ {h.number}
-      </div>
+            {holeStatuses
+              .filter((h) => Number(h.number) <= holeLimit)
+              .map((h) => (
+                <div key={h.number} className="border rounded-lg p-2 bg-white shadow-sm text-center">
+                  <div
+                    className={`text-xs font-semibold px-2 py-0.5 mb-2 rounded-full text-white ${colorMap[h.color]}`}
+                  >
+                    หลุมที่ {h.number}
+                  </div>
 
-      <div className="w-10 h-10 mx-auto mb-2 rounded-full flex items-center justify-center border">
-        <div className={`w-6 h-6 rounded-full ${colorMap[h.color]}`} />
-      </div>
+                  <div className="w-10 h-10 mx-auto mb-2 rounded-full flex items-center justify-center border">
+                    <div className={`w-6 h-6 rounded-full ${colorMap[h.color]}`} />
+                  </div>
 
-      <div className="text-xs text-gray-700 truncate">{h.status}</div>
-    </div>
-  ))}
+                  <div className="text-xs text-gray-700 truncate">{h.status}</div>
+
+                  {/* ✅ เพิ่ม: ชื่อกลุ่ม */}
+                  {h.groupName ? (
+                    <div className="mt-1 text-[11px] font-semibold text-gray-900 truncate">
+                      กลุ่ม: {h.groupName}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-gray-400">กลุ่ม: -</div>
+                  )}
+
+                  {/* ✅ เพิ่ม: แคดดี้ที่อยู่หลุมนี้ */}
+                  {h.caddyHere?.length ? (
+                    <div className="mt-1 text-[11px] text-gray-700">
+                      อยู่ในหลุม: {h.caddyHere.slice(0, 2).join(", ")}
+                      {h.caddyHere.length > 2 ? ` (+${h.caddyHere.length - 2})` : ""}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-gray-400">อยู่ในหลุม: -</div>
+                  )}
+
+                  {/* ✅ เพิ่ม: รถ/ถุง (optional) */}
+                  {h.golfCarQty || h.golfBagQty ? (
+                    <div className="mt-1 text-[11px] text-gray-600">
+                      รถ: {h.golfCarQty} • ถุง: {h.golfBagQty}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
           </div>
         )}
       </section>

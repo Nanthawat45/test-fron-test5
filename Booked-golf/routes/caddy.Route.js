@@ -7,7 +7,8 @@ import {
     cancelDuringRound,
     cancelStart,
     getCaddyAvailable,
-    getCaddyBooking
+    getCaddyBooking,
+    selectHole
 }from "../controllers/caddy.Controller.js"
 
 import { protect, authorizeRoles} from '../middleware/auth.Middleware.js';
@@ -22,4 +23,6 @@ router.put("/cancel-during-round/:bookingId", protect, authorizeRoles("caddy"), 
 
 router.post("/available-caddies", protect, getCaddyAvailable);
 router.get("/caddybooking", protect, authorizeRoles("caddy"), getCaddyBooking);
+
+router.post("/select", protect, authorizeRoles("caddy"), selectHole);
 export default router;

@@ -8,12 +8,14 @@ export const generateToken = (userId, res) => {
     expiresIn: "1d",
   });
 
+  const isProd = process.env.NODE_ENV === "production";
+
   res.cookie("jwt", token, {
     httpOnly: true,
-    secure: true,          // ต้องเป็น true เมื่อใช้ SameSite=None
-    sameSite: "None",      // ✅ อนุญาตข้ามโดเมน (จำเป็นสำหรับ vercel <-> render)
-    path: "/",             // แนะนำให้ระบุชัด
-    maxAge: 24 * 60 * 60 * 1000, // 1 วัน
+    secure: isProd,                    // ✅ dev (localhost http) = false
+    sameSite: isProd ? "None" : "Lax",  // ✅ dev ใช้ Lax
+    path: "/",
+    maxAge: 24 * 60 * 60 * 1000,
   });
 };
 

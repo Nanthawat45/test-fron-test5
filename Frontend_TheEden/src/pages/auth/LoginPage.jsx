@@ -37,51 +37,51 @@ export default function LoginPage() {
     setFormData((p) => ({ ...p, [name]: value }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+const handleSubmit = async (e) => {
+  e.preventDefault();
 
-    if (!/\S+@\S+\.\S+/.test(formData.email)) {
-      setNotif({ type: "error", message: "กรุณากรอกอีเมลให้ถูกต้อง" });
-      return;
-    }
-    if ((formData.password || "").length < 8) {
-      setNotif({ type: "error", message: "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร" });
-      return;
-    }
+  const email = String(formData.email || "").trim().toLowerCase();
+  const password = String(formData.password || "").trim();
 
-    setLoading(true);
-    setNotif({ type: "", message: "" });
+  if (!/\S+@\S+\.\S+/.test(email)) {
+    setNotif({ type: "error", message: "กรุณากรอกอีเมลให้ถูกต้อง" });
+    return;
+  }
+  if (password.length < 8) {
+    setNotif({ type: "error", message: "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร" });
+    return;
+  }
 
-    try {
-      // เรียก login จาก context (context จะ setUser ให้)
-      const res = await login({
-        email: formData.email,
-        password: formData.password,
+  setLoading(true);
+  setNotif({ type: "", message: "" });
+
+  try {
+    const res = await login({ email, password });
+    const user = res?.user || res;
+
+    if (isStaffRole(user?.role)) {
+      await logout();
+      setNotif({
+        type: "error",
+        message: "บัญชีนี้เป็นพนักงาน/ผู้ดูแล โปรดเข้าสู่ระบบที่หน้าสำหรับพนักงาน/ผู้ดูแล",
       });
-      const user = res?.user || res;
-
-      // กันกรณี role ของพนักงาน/ผู้ดูแล เข้ามาที่หน้า golfer
-      if (isStaffRole(user?.role)) {
-        await logout(); // เคลียร์ session ที่ context เพิ่งตั้งไว้
-        setNotif({
-          type: "error",
-          message:
-            "บัญชีนี้เป็นพนักงาน/ผู้ดูแล โปรดเข้าสู่ระบบที่หน้าสำหรับพนักงาน/ผู้ดูแล",
-        });
-        return;
-      }
-
-      // ผ่าน: ผู้ใช้ทั่วไป
-      await toastBlack("เข้าสู่ระบบสำเร็จ!", "success");
-      navigate(roleToPathUser(), { replace: true });
-
-    } catch (err) {
-      setNotif({ type: "error", message: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" });
-    } finally {
-      setLoading(false);
-      setFormData((p) => ({ ...p, password: "" }));
+      return;
     }
-  };
+
+    await toastBlack("เข้าสู่ระบบสำเร็จ!", "success");
+    // ✅ เคลียร์ฟอร์มตอนสำเร็จพอ
+    setFormData({ email: "", password: "" });
+    navigate(roleToPathUser(), { replace: true });
+  } catch (err) {
+    const msg =
+      err?.response?.data?.message ||
+      err?.message ||
+      "อีเมลหรือรหัสผ่านไม่ถูกต้อง";
+    setNotif({ type: "error", message: msg });
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <>

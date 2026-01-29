@@ -1,5 +1,6 @@
 import Hole from "../models/Hole.js";
 import Item from "../models/Item.js";
+import CaddyHoleHistory from "../models/CaddyHoleHistory.js";
 import mongoose from "mongoose";
 
 export const close = async (req, res) => {
@@ -101,13 +102,113 @@ export const report = async (req, res) => {
 }
 
 export const getHoles = async (req, res) => {
-    try{
-        const holes = await Hole.find()
-        res.json(holes);
-    } catch {
-        res.status(500).json({message:"Server error"});//เซิร์ฟเวอร์ error
+  try {
+    // 1) เตรียม 18 หลุมว่าง
+    const holes = Array.from({ length: 18 }).map((_, i) => ({
+      holeNumber: i + 1,
+      occupied: false,
+
+      bookingId: null,
+      groupName: "",
+      golfCarQty: 0,
+      golfBagQty: 0,
+
+      // ✅ รายชื่อแคดดี้ในหลุม + เวลาเริ่มหลุม
+      caddiesInHole: [], // [{ caddyId, name, startedAt }]
+      startedAtMin: null, // เวลาเริ่มที่เร็วสุดในหลุมนี้
+    }));
+
+    // 2) ดึง caddy ที่มี booking + มี currentHole (ตามที่คุณเลือก: เอาหมด ถ้ามี activeBookingId)
+    const caddies = await Caddy.find({
+      activeBookingId: { $ne: null },
+      currentHole: { $ne: null },
+    })
+      .select("caddy_id name activeBookingId currentHole")
+      .lean();
+
+    if (!caddies.length) return res.json(holes);
+
+    // 3) ดึง booking ที่เกี่ยวข้อง (groupName + golfCar/golfBag)
+    const bookingIds = [
+      ...new Set(caddies.map((c) => String(c.activeBookingId)).filter(Boolean)),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+
+    const bookings = await Booking.find({ _id: { $in: bookingIds } })
+      .select("groupName golfCar golfBag")
+      .lean();
+
+    const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
+
+    // 4) ดึง history ล่าสุดที่ยังไม่ปิด (leftAt=null) เพื่อเอา enteredAt เป็น startedAt
+    const caddyUserIds = [
+      ...new Set(caddies.map((c) => String(c.caddy_id)).filter(Boolean)),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+
+    const latestOpen = await CaddyHoleHistory.aggregate([
+      {
+        $match: {
+          caddyId: { $in: caddyUserIds },
+          bookingId: { $in: bookingIds },
+          leftAt: null,
+        },
+      },
+      { $sort: { enteredAt: -1 } },
+      {
+        $group: {
+          _id: { caddyId: "$caddyId", bookingId: "$bookingId" },
+          enteredAt: { $first: "$enteredAt" },
+          holeNumber: { $first: "$holeNumber" },
+          order: { $first: "$order" },
+        },
+      },
+    ]);
+
+    const startedAtMap = new Map();
+    for (const r of latestOpen) {
+      const key = `${String(r._id.caddyId)}|${String(r._id.bookingId)}`;
+      startedAtMap.set(key, r.enteredAt || null);
     }
-}
+
+    // 5) ใส่ข้อมูลลงหลุม
+    for (const c of caddies) {
+      const holeNum = Number(c.currentHole);
+      if (!Number.isFinite(holeNum) || holeNum < 1 || holeNum > 18) continue;
+
+      const idx = holeNum - 1;
+      const bookingIdStr = String(c.activeBookingId);
+      const b = bookingMap.get(bookingIdStr);
+
+      holes[idx].occupied = true;
+
+      // ตั้ง snapshot booking ครั้งแรกของหลุมนี้
+      if (!holes[idx].bookingId && b) {
+        holes[idx].bookingId = bookingIdStr;
+        holes[idx].groupName = b.groupName || "";
+        holes[idx].golfCarQty = Number(b.golfCar || 0);
+        holes[idx].golfBagQty = Number(b.golfBag || 0);
+      }
+
+      const key = `${String(c.caddy_id)}|${bookingIdStr}`;
+      const startedAt = startedAtMap.get(key) || null;
+
+      holes[idx].caddiesInHole.push({
+        caddyId: String(c.caddy_id),
+        name: c.name || "Caddy",
+        startedAt, // ✅ เวลาเริ่มหลุม
+      });
+
+      if (startedAt) {
+        const cur = holes[idx].startedAtMin ? new Date(holes[idx].startedAtMin) : null;
+        if (!cur || new Date(startedAt) < cur) holes[idx].startedAtMin = startedAt;
+      }
+    }
+
+    return res.json(holes);
+  } catch (err) {
+    console.error("getHoles error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
 
 export const getByIdHoles = async (req, res) => {
     const { id } = req.params;

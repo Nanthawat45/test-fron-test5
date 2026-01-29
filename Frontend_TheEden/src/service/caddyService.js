@@ -29,6 +29,12 @@ const getAvailableCaddies = (dateStr) =>
 // การจองของแคดดี้ที่ล็อกอินอยู่
 const getCaddyBookings = () => api.get(`${CADDY_API}/caddybooking`);
 
+const selectHole = ({ bookingId, holeNumber }) =>
+  api.post(`${CADDY_API}/select`, {
+    bookingId,
+    holeNumber,
+  });
+
 const CaddyService = {
   startRound,
   endRound,
@@ -37,6 +43,7 @@ const CaddyService = {
   cancelDuringRound,
   getAvailableCaddies,
   getCaddyBookings,
+  selectHole,
 };
 
 export default CaddyService;

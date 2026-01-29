@@ -21,35 +21,62 @@ const DashboardStart = () => {
   const [confirmData, setConfirmData] = useState(null);
   const [popup, setPopup] = useState(null);
 
+  const formatStartedAt = (dt) => {
+    if (!dt) return "-";
+    const d = new Date(dt);
+    if (Number.isNaN(d.getTime())) return "-";
+    return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+  };
+
   const fetchHoleStatuses = async () => {
     setLoadingHoles(true);
     setHolesError(null);
+
     try {
-      const { data } = await api.get("/hole/gethole");
-      const formatted = (data || []).map((h) => {
-        let displayColor = "green";
-        let displayStatus = "ใช้งานได้";
-        if (h.status === "close" || h.status === "closed") {
-          displayColor = "red";
-          displayStatus = h?.description || "ปิดหลุม";
-        } else if (h.status === "editing" || h.status === "under_maintenance") {
-          displayColor = "blue";
-          displayStatus = "กำลังแก้ไข";
-        } else if (h.status === "help_car" || h.status === "go_help_car") {
-          displayColor = "orange";
-          displayStatus = h.status === "help_car" ? "ขอรถกอล์ฟช่วย" : "สลับรถแล้ว";
-        }
-        return {
-          number: h.holeNumber ?? h.number ?? h?._id?.slice(-2),
-          color: displayColor,
-          status: displayStatus,
-        };
-      });
+      const { data } = await api.get("api/hole/gethole"); // ✅ getHoles ใหม่
+
+      const formatted = (data || [])
+        .map((h) => {
+          const holeNumber = Number(h.holeNumber ?? h.number);
+          if (!Number.isFinite(holeNumber)) return null;
+
+          const occupied = !!h.occupied;
+
+          // ✅ แปลผลสี/ข้อความจาก payload ใหม่
+          const displayColor = occupied ? "yellow" : "green";
+          const displayStatus = occupied ? "มีแคดดี้อยู่" : "ว่าง";
+
+          const caddyHere = (h.caddiesInHole || [])
+            .map((c) => c?.name)
+            .filter(Boolean);
+
+          const startedAt =
+            h.startedAtMin ||
+            (h.caddiesInHole?.[0]?.startedAt ? h.caddiesInHole[0].startedAt : null);
+
+          return {
+            number: holeNumber,
+            color: displayColor,
+            status: displayStatus,
+
+            groupName: h.groupName || "",
+            caddyHere,
+            startedAt,
+
+            golfCarQty: Number(h.golfCarQty || 0),
+            golfBagQty: Number(h.golfBagQty || 0),
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.number - b.number);
+
       setHoleStatuses(formatted);
     } catch (err) {
       setHolesError(
         err?.response?.data?.message ||
-          (err?.response?.status === 401 ? "กรุณาเข้าสู่ระบบอีกครั้ง" : "ไม่สามารถดึงข้อมูลสถานะหลุมได้")
+          (err?.response?.status === 401
+            ? "กรุณาเข้าสู่ระบบอีกครั้ง"
+            : "ไม่สามารถดึงข้อมูลสถานะหลุมได้")
       );
       setHoleStatuses([]);
     } finally {
@@ -59,6 +86,9 @@ const DashboardStart = () => {
 
   useEffect(() => {
     fetchHoleStatuses();
+    // ถ้าอยากให้ real-time เหมือนหน้า Dashboard หลัก:
+    const t = setInterval(fetchHoleStatuses, 5000);
+    return () => clearInterval(t);
   }, []);
 
   const askHoleAction = (title, payload) => {
@@ -70,20 +100,31 @@ const DashboardStart = () => {
     try {
       const { title, payload } = confirmData;
       const { holeNumber, description } = payload || {};
+
+      // ✅ ส่วนแจ้งปัญหา ใช้ API เดิมเหมือนเดิม
       if (title === "แจ้งปิดหลุม") {
-        await api.put(`/hole/close`, { holeNumber: Number(holeNumber), description });
+        await api.put(`/hole/close`, {
+          holeNumber: Number(holeNumber),
+          description,
+        });
       } else if (title === "แจ้งสถานะกำลังแก้ไข") {
         await api.put(`/hole/report`, { holeNumber: Number(holeNumber) });
       } else if (title === "แจ้งเปิดใช้งานหลุม") {
         await api.put(`/hole/open`, { holeNumber: Number(holeNumber) });
       } else if (title === "ขอรถกอล์ฟช่วย") {
-        await api.put(`/hole/help-car`, { holeNumber: Number(holeNumber), description: description || "" });
-
+        await api.put(`/hole/help-car`, {
+          holeNumber: Number(holeNumber),
+          description: description || "",
+        });
       }
+
       await fetchHoleStatuses();
       setPopup({ title: "ดำเนินการสำเร็จ", isError: false });
     } catch (err) {
-      const msg = err?.response?.data?.message || err?.message || "เกิดข้อผิดพลาดในการดำเนินการ";
+      const msg =
+        err?.response?.data?.message ||
+        err?.message ||
+        "เกิดข้อผิดพลาดในการดำเนินการ";
       setPopup({ title: msg, isError: true });
     } finally {
       setConfirmData(null);
@@ -139,7 +180,9 @@ const DashboardStart = () => {
               onChange={(e) => setIssue(e.target.value)}
               className="w-full mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
             >
-              <option value="" disabled>-- กรุณาเลือกปัญหา --</option>
+              <option value="" disabled>
+                -- กรุณาเลือกปัญหา --
+              </option>
               <option value="ระบายน้ำ แฟร์เวย์">ระบายน้ำ แฟร์เวย์</option>
               <option value="ระบายน้ำกรีน">ระบายน้ำกรีน</option>
               <option value="ระบายน้ำบังเกอร์">ระบายน้ำบังเกอร์</option>
@@ -152,9 +195,17 @@ const DashboardStart = () => {
 
         <div className="text-center">
           <button
-            onClick={() => ask(title, { holeNumber, description: issue || "", name: showName ? name : "" })}
+            onClick={() =>
+              ask(title, {
+                holeNumber,
+                description: issue || "",
+                name: showName ? name : "",
+              })
+            }
             className={`text-white text-sm px-4 py-1 rounded-full transition-colors ${
-              isValid() ? "bg-green-600 hover:bg-green-700" : "bg-slate-600 cursor-not-allowed"
+              isValid()
+                ? "bg-green-600 hover:bg-green-700"
+                : "bg-slate-600 cursor-not-allowed"
             }`}
             disabled={!isValid()}
           >
@@ -189,54 +240,101 @@ const DashboardStart = () => {
         <div className="border-2 border-gray-600 rounded-xl p-4 shadow-lg">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6 justify-items-center sm:justify-items-stretch">
             <HoleCard title="แจ้งปิดหลุม" color="red" showIssue={true} ask={askHoleAction} />
-            
             <HoleCard title="แจ้งเปิดใช้งานหลุม" color="green" ask={askHoleAction} />
             <HoleCard title="ขอรถกอล์ฟช่วย" color="orange" showName={true} ask={askHoleAction} />
           </div>
         </div>
       </section>
 
-      {/* สถานะหลุม */}
+      {/* สถานะหลุม (โชว์เฉพาะ “มีคนอยู่” ตาม filter เดิมของคุณ: ไม่โชว์เขียว) */}
       <section className="max-w-[75rem] mx-auto mt-8 px-1 sm:px-6">
-        <h2 className="text-2xl font-extrabold mb-4 text-center text-gray-800">สถานะหลุมกอล์ฟ</h2>
+        <h2 className="text-2xl font-extrabold mb-4 text-center text-gray-800">
+          สถานะหลุมกอล์ฟ
+        </h2>
+
         {loadingHoles ? (
           <div className="text-center text-lg text-gray-600 py-10">กำลังโหลดข้อมูล...</div>
         ) : holesError ? (
           <div className="text-center text-lg text-red-600 py-10">{holesError}</div>
         ) : (
           <div className="border-2 border-gray-400 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 shadow-md bg-white">
-            {holeStatuses.filter(h => h.color !== "green").length > 0 ? (
-              holeStatuses.filter(h => h.color !== "green").map((h) => (
-                <div
-                  key={h.number}
-                  className="border rounded-lg p-2 bg-white shadow-sm text-center transform hover:scale-105 transition-transform duration-200"
-                >
-                  <div className={`text-xs font-semibold px-2 py-0.5 mb-2 rounded-full text-white ${colorMap[h.color] || "bg-gray-400"}`}>
-                    หลุมที่ {h.number}
+            {holeStatuses.filter((h) => h.color !== "green").length > 0 ? (
+              holeStatuses
+                .filter((h) => h.color !== "green")
+                .map((h) => (
+                  <div
+                    key={h.number}
+                    className="border rounded-lg p-2 bg-white shadow-sm text-center transform hover:scale-105 transition-transform duration-200"
+                  >
+                    <div
+                      className={`text-xs font-semibold px-2 py-0.5 mb-2 rounded-full text-white ${
+                        colorMap[h.color] || "bg-gray-400"
+                      }`}
+                    >
+                      หลุมที่ {h.number}
+                    </div>
+
+                    <div className="w-10 h-10 mx-auto mb-2 rounded-full flex items-center justify-center border border-gray-300 shadow-inner bg-white">
+                      <div className={`w-6 h-6 rounded-full ${colorMap[h.color] || "bg-gray-400"}`} />
+                    </div>
+
+                    <div className="text-xs text-gray-700 truncate">{h.status}</div>
+
+                    {/* เพิ่มข้อมูลใหม่จาก backend */}
+                    {h.groupName ? (
+                      <div className="mt-1 text-[11px] font-semibold text-gray-900 truncate">
+                        กลุ่ม: {h.groupName}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-gray-400">กลุ่ม: -</div>
+                    )}
+
+                    {h.caddyHere?.length ? (
+                      <div className="mt-1 text-[11px] text-gray-700">
+                        อยู่ในหลุม: {h.caddyHere.slice(0, 2).join(", ")}
+                        {h.caddyHere.length > 2 ? ` (+${h.caddyHere.length - 2})` : ""}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-gray-400">อยู่ในหลุม: -</div>
+                    )}
+
+                    <div className="mt-1 text-[11px] text-gray-600">
+                      เริ่มหลุม: {formatStartedAt(h.startedAt)}
+                    </div>
+
+                    {h.golfCarQty || h.golfBagQty ? (
+                      <div className="mt-1 text-[11px] text-gray-600">
+                        รถ: {h.golfCarQty} • ถุง: {h.golfBagQty}
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="w-10 h-10 mx-auto mb-2 rounded-full flex items-center justify-center border border-gray-300 shadow-inner bg-white">
-                    <div className={`w-6 h-6 rounded-full ${colorMap[h.color] || "bg-gray-400"}`} />
-                  </div>
-                  <div className="text-xs text-gray-700 truncate">{h.status}</div>
-                </div>
-              ))
+                ))
             ) : (
-              <div className="col-span-full text-center text-gray-500 py-10">ไม่พบข้อมูลสถานะหลุมกอล์ฟ</div>
+              <div className="col-span-full text-center text-gray-500 py-10">
+                ไม่พบข้อมูลสถานะหลุมกอล์ฟ
+              </div>
             )}
           </div>
         )}
       </section>
 
+      {/* confirm */}
       {confirmData && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[60%] max-w-xs">
             <FontAwesomeIcon icon={faExclamation} className="text-yellow-400 mb-4" style={{ fontSize: 48 }} />
             <h3 className="text-lg font-semibold mb-4">คุณแน่ใจหรือไม่?</h3>
             <div className="flex justify-center gap-4">
-              <button onClick={handleConfirm} className="bg-green-600 text-white px-6 py-2 rounded-full hover:bg-green-700">
+              <button
+                onClick={handleConfirm}
+                className="bg-green-600 text-white px-6 py-2 rounded-full hover:bg-green-700"
+              >
                 ตกลง
               </button>
-              <button onClick={() => setConfirmData(null)} className="bg-red-600 text-white px-6 py-2 rounded-full hover:bg-red-700">
+              <button
+                onClick={() => setConfirmData(null)}
+                className="bg-red-600 text-white px-6 py-2 rounded-full hover:bg-red-700"
+              >
                 ยกเลิก
               </button>
             </div>
@@ -244,6 +342,7 @@ const DashboardStart = () => {
         </div>
       )}
 
+      {/* popup */}
       {popup && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[70%] max-w-xs space-y-4">
@@ -254,7 +353,10 @@ const DashboardStart = () => {
             />
             <h2 className="text-3xl font-extrabold">{popup.isError ? "เกิดข้อผิดพลาด!" : "สำเร็จ!"}</h2>
             <h3 className="text-base font-normal text-gray-800">{popup.title}</h3>
-            <button onClick={() => setPopup(null)} className="mt-4 bg-gray-500 text-white px-6 py-2 rounded-full hover:bg-green-600">
+            <button
+              onClick={() => setPopup(null)}
+              className="mt-4 bg-gray-500 text-white px-6 py-2 rounded-full hover:bg-green-600"
+            >
               ตกลง
             </button>
           </div>

@@ -25,47 +25,60 @@ const Dashboard = () => {
 
   const [holeLimit, setHoleLimit] = useState(18);
 
+  // --- helper: format startedAt ---
+  const formatStartedAt = (dt) => {
+    if (!dt) return "-";
+    const d = new Date(dt);
+    if (Number.isNaN(d.getTime())) return "-";
+    return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+  };
+
   const fetchHoleStatuses = async () => {
     setLoadingHoles(true);
     setHolesError(null);
 
     try {
+      // ✅ หลังบ้าน getHoles ใหม่: ส่ง array 18 หลุม
       const { data } = await api.get("/hole/gethole");
 
       const formatted = (data || []).map((h) => {
-        let displayColor = "green";
-        let displayStatus = "ใช้งานได้";
+        const holeNumber = Number(h.holeNumber ?? h.number);
+        const occupied = !!h.occupied;
 
-        if (h.status === "close" || h.status === "closed") {
-          displayColor = "red";
-          displayStatus = h?.description || "ปิดหลุม";
-        } else if (h.status === "editing" || h.status === "under_maintenance") {
-          displayColor = "blue";
-          displayStatus = "กำลังแก้ไข";
-        } else if (h.status === "help_car" || h.status === "go_help_car") {
-          displayColor = "orange";
-          displayStatus =
-            h.status === "help_car" ? "ขอรถกอล์ฟช่วย" : "สลับรถแล้ว";
-        }
+        // ✅ สี/สถานะใหม่: โชว์จาก occupied (ไม่พึ่ง status เดิม)
+        const displayColor = occupied ? "yellow" : "green";
+        const displayStatus = occupied ? "มีแคดดี้อยู่" : "ว่าง";
 
-        const caddyHere = (h.caddyReports || [])
-          .map((r) => r?.caddyName)
+        // ✅ รายชื่อแคดดี้ในหลุม (payload ใหม่: caddiesInHole)
+        const caddyHere = (h.caddiesInHole || [])
+          .map((c) => c?.name)
           .filter(Boolean);
 
+        // ✅ เวลาเริ่มหลุม (เอา startedAtMin ก่อน ถ้าไม่มีค่อย fallback)
+        const startedAt =
+          h.startedAtMin ||
+          (h.caddiesInHole?.[0]?.startedAt ? h.caddiesInHole[0].startedAt : null);
+
         return {
-          number: Number(h.holeNumber),
+          number: holeNumber,
           color: displayColor,
           status: displayStatus,
 
-          // ✅ เพิ่มเพื่อโชว์บนการ์ด (เคส 1: getHoles ส่งทั้ง doc อยู่แล้ว)
           groupName: h.groupName || "",
           caddyHere,
+          startedAt,
+
           golfCarQty: Number(h.golfCarQty || 0),
           golfBagQty: Number(h.golfBagQty || 0),
         };
       });
 
-      setHoleStatuses(formatted);
+      // ✅ กันกรณี backend ส่งไม่ครบ 18 (เผื่อ)
+      const safe = formatted
+        .filter((x) => Number.isFinite(x.number))
+        .sort((a, b) => a.number - b.number);
+
+      setHoleStatuses(safe);
     } catch (err) {
       setHolesError(
         err?.response?.data?.message ||
@@ -81,8 +94,6 @@ const Dashboard = () => {
 
   useEffect(() => {
     fetchHoleStatuses();
-
-    // ✅ แนะนำให้ refresh เรื่อยๆ เพราะตำแหน่งเปลี่ยนบ่อย
     const t = setInterval(fetchHoleStatuses, 5000);
     return () => clearInterval(t);
   }, []);
@@ -102,6 +113,7 @@ const Dashboard = () => {
       const { title, payload } = confirmData;
       const { holeNumber, description } = payload || {};
 
+      // ✅ endpoint แจ้งปัญหาเดิมยังใช้ได้เหมือนเดิม
       if (title === "แจ้งปิดหลุม") {
         await api.put(`/hole/close`, {
           holeNumber: Number(holeNumber),
@@ -288,7 +300,7 @@ const Dashboard = () => {
         </button>
       </div>
 
-      {/* เลือก 9/18 หลุม (สำหรับ filter แสดงผลบนหน้า) */}
+      {/* เลือก 9/18 หลุม */}
       <div className="flex justify-center gap-4 mb-4">
         <button
           onClick={() => setHoleLimit(9)}
@@ -377,7 +389,7 @@ const Dashboard = () => {
 
                   <div className="text-xs text-gray-700 truncate">{h.status}</div>
 
-                  {/* ✅ เพิ่ม: ชื่อกลุ่ม */}
+                  {/* ชื่อกลุ่ม */}
                   {h.groupName ? (
                     <div className="mt-1 text-[11px] font-semibold text-gray-900 truncate">
                       กลุ่ม: {h.groupName}
@@ -386,7 +398,7 @@ const Dashboard = () => {
                     <div className="mt-1 text-[11px] text-gray-400">กลุ่ม: -</div>
                   )}
 
-                  {/* ✅ เพิ่ม: แคดดี้ที่อยู่หลุมนี้ */}
+                  {/* แคดดี้ที่อยู่หลุมนี้ */}
                   {h.caddyHere?.length ? (
                     <div className="mt-1 text-[11px] text-gray-700">
                       อยู่ในหลุม: {h.caddyHere.slice(0, 2).join(", ")}
@@ -398,7 +410,16 @@ const Dashboard = () => {
                     </div>
                   )}
 
-                  {/* ✅ เพิ่ม: รถ/ถุง (optional) */}
+                  {/* เวลาเริ่มหลุม */}
+                  {h.startedAt ? (
+                    <div className="mt-1 text-[11px] text-gray-600">
+                      เริ่มหลุม: {formatStartedAt(h.startedAt)}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-gray-400">เริ่มหลุม: -</div>
+                  )}
+
+                  {/* รถ/ถุง */}
                   {h.golfCarQty || h.golfBagQty ? (
                     <div className="mt-1 text-[11px] text-gray-600">
                       รถ: {h.golfCarQty} • ถุง: {h.golfBagQty}

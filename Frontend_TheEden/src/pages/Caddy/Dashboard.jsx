@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faExclamation } from "@fortawesome/free-solid-svg-icons";
+import { faExclamation, faRotateRight } from "@fortawesome/free-solid-svg-icons";
 import { faCircleCheck } from "@fortawesome/free-regular-svg-icons";
 import api from "../../service/api";
 
@@ -12,6 +12,14 @@ const colorMap = {
   orange: "bg-orange-500",
   yellow: "bg-yellow-400",
 };
+
+function stableStringify(obj) {
+  try {
+    return JSON.stringify(obj);
+  } catch {
+    return String(obj);
+  }
+}
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -25,60 +33,77 @@ const Dashboard = () => {
 
   const [holeLimit, setHoleLimit] = useState(18);
 
-  // --- helper: format startedAt ---
-  const formatStartedAt = (dt) => {
-    if (!dt) return "-";
-    const d = new Date(dt);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+  // ✅ กันการรีเฟรชตอนกำลังกรอกฟอร์ม (แก้ปัญหาพิมพ์แล้วหาย)
+  const [isEditingForm, setIsEditingForm] = useState(false);
+  const editingTimeoutRef = useRef(null);
+
+  const markEditing = () => {
+    setIsEditingForm(true);
+    if (editingTimeoutRef.current) clearTimeout(editingTimeoutRef.current);
+    // ถ้าหยุดพิมพ์ 2 วิ ค่อยถือว่าไม่ได้แก้แล้ว
+    editingTimeoutRef.current = setTimeout(() => {
+      setIsEditingForm(false);
+    }, 2000);
   };
 
-  const fetchHoleStatuses = async () => {
+  useEffect(() => {
+    return () => {
+      if (editingTimeoutRef.current) clearTimeout(editingTimeoutRef.current);
+    };
+  }, []);
+
+  // ✅ ช่วยลดการ setState ถ้าข้อมูลเหมือนเดิม
+  const prevSignatureRef = useRef("");
+
+  const fetchHoleStatuses = async ({ force = false } = {}) => {
+    // ถ้ากำลังกรอกฟอร์มอยู่ → ไม่ดึง (กันรีเซ็ต)
+    if (!force && isEditingForm) return;
+
     setLoadingHoles(true);
     setHolesError(null);
 
     try {
-      // ✅ หลังบ้าน getHoles ใหม่: ส่ง array 18 หลุม
       const { data } = await api.get("/hole/gethole");
 
       const formatted = (data || []).map((h) => {
-        const holeNumber = Number(h.holeNumber ?? h.number);
-        const occupied = !!h.occupied;
+        let displayColor = "green";
+        let displayStatus = "ใช้งานได้";
 
-        // ✅ สี/สถานะใหม่: โชว์จาก occupied (ไม่พึ่ง status เดิม)
-        const displayColor = occupied ? "yellow" : "green";
-        const displayStatus = occupied ? "มีแคดดี้อยู่" : "ว่าง";
+        if (h.status === "close" || h.status === "closed") {
+          displayColor = "red";
+          displayStatus = h?.description || "ปิดหลุม";
+        } else if (h.status === "editing" || h.status === "under_maintenance") {
+          displayColor = "blue";
+          displayStatus = "กำลังแก้ไข";
+        } else if (h.status === "help_car" || h.status === "go_help_car") {
+          displayColor = "orange";
+          displayStatus =
+            h.status === "help_car" ? "ขอรถกอล์ฟช่วย" : "สลับรถแล้ว";
+        }
 
-        // ✅ รายชื่อแคดดี้ในหลุม (payload ใหม่: caddiesInHole)
-        const caddyHere = (h.caddiesInHole || [])
-          .map((c) => c?.name)
+        const caddyHere = (h.caddyReports || [])
+          .map((r) => r?.caddyName)
           .filter(Boolean);
 
-        // ✅ เวลาเริ่มหลุม (เอา startedAtMin ก่อน ถ้าไม่มีค่อย fallback)
-        const startedAt =
-          h.startedAtMin ||
-          (h.caddiesInHole?.[0]?.startedAt ? h.caddiesInHole[0].startedAt : null);
-
         return {
-          number: holeNumber,
+          number: Number(h.holeNumber),
           color: displayColor,
           status: displayStatus,
-
           groupName: h.groupName || "",
           caddyHere,
-          startedAt,
-
           golfCarQty: Number(h.golfCarQty || 0),
           golfBagQty: Number(h.golfBagQty || 0),
         };
       });
 
-      // ✅ กันกรณี backend ส่งไม่ครบ 18 (เผื่อ)
-      const safe = formatted
-        .filter((x) => Number.isFinite(x.number))
-        .sort((a, b) => a.number - b.number);
-
-      setHoleStatuses(safe);
+      // ✅ setState เฉพาะตอนข้อมูลเปลี่ยนจริง
+      const signature = stableStringify(formatted);
+      if (!force && signature === prevSignatureRef.current) {
+        // ข้อมูลเหมือนเดิม → ไม่ต้อง setHoleStatuses (ลดรีเรนเดอร์)
+        return;
+      }
+      prevSignatureRef.current = signature;
+      setHoleStatuses(formatted);
     } catch (err) {
       setHolesError(
         err?.response?.data?.message ||
@@ -93,9 +118,9 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
-    fetchHoleStatuses();
-    const t = setInterval(fetchHoleStatuses, 5000);
-    return () => clearInterval(t);
+    // ✅ โหลดครั้งแรกเท่านั้น (เอา interval ออก)
+    fetchHoleStatuses({ force: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const askHoleAction = (title, payload) => {
@@ -113,24 +138,23 @@ const Dashboard = () => {
       const { title, payload } = confirmData;
       const { holeNumber, description } = payload || {};
 
-      // ✅ endpoint แจ้งปัญหาเดิมยังใช้ได้เหมือนเดิม
       if (title === "แจ้งปิดหลุม") {
-        await api.put(`/hole/close`, {
+        await api.put("/hole/close", {
           holeNumber: Number(holeNumber),
           description,
         });
       } else if (title === "แจ้งสถานะกำลังแก้ไข") {
-        await api.put(`/hole/report`, { holeNumber: Number(holeNumber) });
+        await api.put("/hole/report", { holeNumber: Number(holeNumber) });
       } else if (title === "แจ้งเปิดใช้งานหลุม") {
-        await api.put(`/hole/open`, { holeNumber: Number(holeNumber) });
+        await api.put("/hole/open", { holeNumber: Number(holeNumber) });
       } else if (title === "ขอรถกอล์ฟช่วย") {
-        await api.put(`/hole/help-car`, {
+        await api.put("/hole/help-car", {
           holeNumber: Number(holeNumber),
           description: description || "",
         });
       }
 
-      await fetchHoleStatuses();
+      await fetchHoleStatuses({ force: true });
       setPopup({ title: "ดำเนินการสำเร็จ", isError: false });
     } catch (err) {
       const msg =
@@ -226,7 +250,10 @@ const Dashboard = () => {
         <input
           type="text"
           value={holeNumber}
-          onChange={(e) => setHoleNumber(e.target.value)}
+          onChange={(e) => {
+            setHoleNumber(e.target.value);
+            markEditing();
+          }}
           className="w-20 mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-center text-sm"
           placeholder="เลขหลุม"
         />
@@ -237,7 +264,10 @@ const Dashboard = () => {
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                markEditing();
+              }}
               className="w-full mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
               placeholder="ระบุจำนวน"
             />
@@ -249,7 +279,10 @@ const Dashboard = () => {
             <label className="block mb-1 font-medium text-sm">เลือกปัญหา</label>
             <select
               value={issue}
-              onChange={(e) => setIssue(e.target.value)}
+              onChange={(e) => {
+                setIssue(e.target.value);
+                markEditing();
+              }}
               className="w-full mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
             >
               <option value="" disabled>
@@ -290,17 +323,24 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-white font-inter px-4 py-6">
-      {/* ปุ่มย้อนกลับ */}
-      <div className="max-w-6xl mx-auto mb-4">
+      <div className="max-w-6xl mx-auto mb-4 flex items-center justify-between">
         <button
           onClick={() => navigate(-1)}
           className="flex items-center text-gray-700 hover:text-gray-900 font-semibold transition-colors"
         >
           &lt; ย้อนกลับ
         </button>
+
+        {/* ✅ ปุ่ม Refresh เอง */}
+        <button
+          onClick={() => fetchHoleStatuses({ force: true })}
+          className="flex items-center gap-2 px-4 py-2 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold"
+        >
+          <FontAwesomeIcon icon={faRotateRight} />
+          รีเฟรช
+        </button>
       </div>
 
-      {/* เลือก 9/18 หลุม */}
       <div className="flex justify-center gap-4 mb-4">
         <button
           onClick={() => setHoleLimit(9)}
@@ -321,7 +361,6 @@ const Dashboard = () => {
         </button>
       </div>
 
-      {/* แจ้งปัญหาหลุม */}
       <section className="max-w-6xl mx-auto">
         <div className="flex justify-center mt-2 mb-6">
           <div className="inline-block bg-black text-white text-lg font-bold py-2 px-6 rounded-lg shadow-md">
@@ -356,7 +395,6 @@ const Dashboard = () => {
         </div>
       </section>
 
-      {/* สถานะหลุม */}
       <section className="max-w-[75rem] mx-auto mt-8 px-1 sm:px-6">
         <h2 className="text-2xl font-extrabold mb-4 text-center text-gray-800">
           สถานะหลุมกอล์ฟ
@@ -389,7 +427,6 @@ const Dashboard = () => {
 
                   <div className="text-xs text-gray-700 truncate">{h.status}</div>
 
-                  {/* ชื่อกลุ่ม */}
                   {h.groupName ? (
                     <div className="mt-1 text-[11px] font-semibold text-gray-900 truncate">
                       กลุ่ม: {h.groupName}
@@ -398,11 +435,12 @@ const Dashboard = () => {
                     <div className="mt-1 text-[11px] text-gray-400">กลุ่ม: -</div>
                   )}
 
-                  {/* แคดดี้ที่อยู่หลุมนี้ */}
                   {h.caddyHere?.length ? (
                     <div className="mt-1 text-[11px] text-gray-700">
                       อยู่ในหลุม: {h.caddyHere.slice(0, 2).join(", ")}
-                      {h.caddyHere.length > 2 ? ` (+${h.caddyHere.length - 2})` : ""}
+                      {h.caddyHere.length > 2
+                        ? ` (+${h.caddyHere.length - 2})`
+                        : ""}
                     </div>
                   ) : (
                     <div className="mt-1 text-[11px] text-gray-400">
@@ -410,16 +448,6 @@ const Dashboard = () => {
                     </div>
                   )}
 
-                  {/* เวลาเริ่มหลุม */}
-                  {h.startedAt ? (
-                    <div className="mt-1 text-[11px] text-gray-600">
-                      เริ่มหลุม: {formatStartedAt(h.startedAt)}
-                    </div>
-                  ) : (
-                    <div className="mt-1 text-[11px] text-gray-400">เริ่มหลุม: -</div>
-                  )}
-
-                  {/* รถ/ถุง */}
                   {h.golfCarQty || h.golfBagQty ? (
                     <div className="mt-1 text-[11px] text-gray-600">
                       รถ: {h.golfCarQty} • ถุง: {h.golfBagQty}

@@ -1,82 +1,186 @@
+// ✅ FILE: src/pages/Caddy/ProcessGolfPage.jsx
+// (ดีไซน์เดิมทั้งหมด + เพิ่มล็อกหลุมที่มีแคดดี้อยู่จาก /hole/gethole)
+
 import React, { useState, useEffect } from "react";
 import Header from "../../components/Caddy/Header";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheckCircle } from "@fortawesome/free-solid-svg-icons";
 import { useNavigate, useLocation } from "react-router-dom";
 import CaddyService from "../../service/caddyService";
+import api from "../../service/api"; // ✅ เพิ่ม: ใช้เรียก /hole/gethole
 
 const ProcessGolfPage = () => {
   const [step, setStep] = useState(1);
-  const [working, setWorking] = useState(false);
-
-  // selectHole state
-  const [isOnGoing, setIsOnGoing] = useState(false);
-  const [currentHole, setCurrentHole] = useState(null);
-  const [rounds, setRounds] = useState(0);
-  const [maxMoves, setMaxMoves] = useState(9);
-  const [loadingHole, setLoadingHole] = useState(false);
-
-  // ✅ ETA / pace / slow state
-  const [paceMin, setPaceMin] = useState(17);
-  const [etaNext, setEtaNext] = useState(null);
-  const [isSlow, setIsSlow] = useState(false);
-  const [actualPrevMin, setActualPrevMin] = useState(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  // popup step 1
+  const [showStartConfirm, setShowStartConfirm] = useState(false);
+  // popup step 2 และ 3
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showBatteryConfirm, setShowBatteryConfirm] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
 
-  const { bookingId: stateBookingId } = location.state || {};
-  const [bookingId, setBookingId] = useState(stateBookingId || null);
+  const {
+    selectedDate: stateDate,
+    selectedTime: stateTime,
+    bookingId: stateBookingId,
+  } = location.state || {};
 
-  // fallback bookingId
+  const [selectedDate, setSelectedDate] = useState(
+    stateDate || localStorage.getItem("selectedDate") || "8 ก.พ ปี 2568"
+  );
+  const [selectedTime, setSelectedTime] = useState(
+    stateTime || localStorage.getItem("selectedTime") || "06.00"
+  );
+
+  const [bookingId, setBookingId] = useState(stateBookingId || null);
+  const [working, setWorking] = useState(false);
+
+  // 🔥 state สำหรับ selectHole
+  const [isOnGoing, setIsOnGoing] = useState(false);
+  const [currentHole, setCurrentHole] = useState(null);
+  const [rounds, setRounds] = useState(0);
+  const [maxMoves, setMaxMoves] = useState(18);
+  const [loadingHole, setLoadingHole] = useState(false);
+
+  // ✅ เพิ่ม: หลุมที่มีแคดดี้อยู่ -> สีเทา + กดไม่ได้
+  const [occupiedHoles, setOccupiedHoles] = useState(new Set());
+  const [loadingOcc, setLoadingOcc] = useState(false);
+
   useEffect(() => {
-    const loadBooking = async () => {
+    if (stateDate) localStorage.setItem("selectedDate", stateDate);
+    if (stateTime) localStorage.setItem("selectedTime", stateTime);
+  }, [stateDate, stateTime]);
+
+  // ✅ พยายามหา bookingId ถ้าไม่ได้ส่งมาทาง state
+  useEffect(() => {
+    const fallbackFromMyBookings = async () => {
       if (bookingId) return;
       try {
         const { data } = await CaddyService.getCaddyBookings();
-        if (data?.length > 0) setBookingId(data[0]._id);
+        if (Array.isArray(data) && data.length > 0) {
+          setBookingId(data[0]._id);
+        }
       } catch (e) {
-        console.warn("โหลด bookingId ไม่ได้:", e);
+        console.warn("ไม่พบ bookingId และไม่สามารถดึงรายการจองของแคดดี้ได้:", e);
       }
     };
-    loadBooking();
+    fallbackFromMyBookings();
   }, [bookingId]);
 
-  const stepTexts = ["เริ่มออกรอบกอล์ฟ", "จบการเล่นกอล์ฟ", "เปลี่ยนแบตรถกอล์ฟ"];
+  const stepTexts = ["เริ่มออกรอบกอล์ฟ", "จบการเล่นกอล์ฟ", "เปลี่ยนแบตรถกอล์ฟสำเร็จ"];
 
-  // STEP 1: start round
-  const handleStartRound = async () => {
-    if (!bookingId) return alert("ไม่พบ bookingId");
+  // ✅ ดึงหลุมที่มีแคดดี้อยู่จาก backend
+  const fetchOccupiedHoles = async () => {
+    try {
+      setLoadingOcc(true);
+      const { data } = await api.get("/hole/gethole");
 
+      // getHoles ใหม่จะมี: { holeNumber, occupied, ... }
+      const occ = new Set(
+        (data || [])
+          .filter((h) => !!h.occupied)
+          .map((h) => Number(h.holeNumber))
+          .filter((n) => Number.isFinite(n))
+      );
+
+      setOccupiedHoles(occ);
+    } catch (e) {
+      // ถ้าดึงไม่ได้ -> ไม่ล็อก (หลังบ้าน selectHole จะกันซ้ำอยู่แล้ว)
+      setOccupiedHoles(new Set());
+    } finally {
+      setLoadingOcc(false);
+    }
+  };
+
+  // ✅ ตอนอยู่ในโหมด onGoing ให้ refresh สถานะหลุมเรื่อยๆ
+  useEffect(() => {
+    if (!isOnGoing) return;
+
+    fetchOccupiedHoles();
+    const t = setInterval(fetchOccupiedHoles, 5000);
+    return () => clearInterval(t);
+  }, [isOnGoing]);
+
+  // ==============================
+  // STEP 1-3 (เดิม)
+  // ==============================
+  const handleNextStep = async () => {
     try {
       setWorking(true);
-      await CaddyService.startRound(bookingId);
 
-      // ✅ reset state สำหรับรอบใหม่ในหน้าเว็บ
-      setIsOnGoing(true);
-      setStep(1);
-      setCurrentHole(null);
-      setRounds(0);
-      setMaxMoves(9);
-      setPaceMin(17);
-      setEtaNext(null);
-      setIsSlow(false);
-      setActualPrevMin(null);
+      if (step === 1) {
+        // เริ่มรอบ
+        if (bookingId) {
+          await CaddyService.startRound(bookingId);
+
+          // ✅ เข้าโหมดเลือกหลุมทันที
+          setIsOnGoing(true);
+
+          // ✅ โหลด occupied หลุมหลัง start
+          fetchOccupiedHoles();
+        } else {
+          console.warn("ไม่มี bookingId: ข้ามการเรียก startRound แต่ยังไปสเต็ปถัดไป");
+        }
+
+        // ❗️เดิม: start แล้วเคย setStep(2) ต่อ แต่ตอนนี้เราจะ “ค้าง step 1”
+        // เพื่อให้เลือกหลุมจนครบก่อน แล้วค่อยปลดล็อกไป step 2
+        return;
+      } else if (step === 2) {
+        // จบรอบ
+        if (bookingId) {
+          await CaddyService.endRound(bookingId);
+        } else {
+          console.warn("ไม่มี bookingId: ข้ามการเรียก endRound แต่ยังไปสเต็ปถัดไป");
+        }
+      } else if (step === 3) {
+        // ✅ สเต็ปสุดท้าย: ตั้งธง finalized
+        if (bookingId) {
+          try {
+            localStorage.setItem(`finalized:${bookingId}`, "1");
+          } catch (e) {
+            console.warn("ตั้งค่า finalized ใน localStorage ไม่สำเร็จ:", e);
+          }
+        }
+
+        navigate("/caddy", {
+          state: { completedSchedule: { date: selectedDate, time: selectedTime } },
+        });
+        return;
+      }
+
+      if (step < 3) {
+        setStep((s) => s + 1);
+      }
     } catch (err) {
-      alert(err?.response?.data?.message || "เริ่มรอบไม่สำเร็จ");
+      console.error("ดำเนินการไม่สำเร็จ:", err);
+      alert(
+        step === 1
+          ? "เริ่มออกรอบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"
+          : step === 2
+          ? "จบการเล่นไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"
+          : "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"
+      );
     } finally {
       setWorking(false);
     }
   };
 
+  // ==============================
   // SELECT HOLE
+  // ==============================
   const handleSelectHole = async (holeNumber) => {
     if (loadingHole) return;
     if (!bookingId) return alert("ไม่พบ bookingId");
 
-    // ✅ กันกดซ้ำติดกันฝั่ง UI (backend ก็กันอยู่แล้ว)
-    if (currentHole === holeNumber) {
-      return alert("ห้ามเลือกหลุมเดิมซ้ำติดกัน กรุณาเลือกหลุมอื่นก่อน");
+    const hole = Number(holeNumber);
+
+    // ✅ กันหน้าเว็บ: ถ้าหลุมมีแคดดี้อยู่ -> ห้ามเลือก
+    // (ยกเว้นกรณีหลุมตัวเอง — แต่ปุ่มหลุมตัวเองจะเป็นเทาอยู่แล้ว)
+    if (occupiedHoles.has(hole) && currentHole !== hole) {
+      alert(`หลุม ${hole} มีแคดดี้อยู่แล้ว เลือกไม่ได้`);
+      return;
     }
 
     try {
@@ -84,61 +188,52 @@ const ProcessGolfPage = () => {
 
       const res = await CaddyService.selectHole({
         bookingId,
-        holeNumber,
+        holeNumber: hole,
       });
 
-      const d = res.data.data;
+      // หลังบ้านตอบ: data: { fromHole, toHole, rounds, maxMoves }
+      const { toHole, rounds: newRounds, maxMoves: mm } = res.data.data;
 
-      // ✅ backend ใหม่ส่ง rounds/maxMoves/toHole
-      setCurrentHole(d.toHole);
-      setRounds(d.rounds);
-      setMaxMoves(d.maxMoves);
+      setCurrentHole(toHole);
+      setRounds(newRounds);
+      setMaxMoves(Number(mm || 18));
 
-      // ✅ ETA / pace / slow
-      if (typeof d.pacePerHoleMin === "number") setPaceMin(d.pacePerHoleMin);
-      if (d.etaNextAt) setEtaNext(new Date(d.etaNextAt));
-      setIsSlow(!!d.isSlowPrevHole);
-      setActualPrevMin(d.actualPrevHoleMin ?? null);
+      // ✅ refresh occupied หลุมอีกครั้ง
+      fetchOccupiedHoles();
 
-      // ✅ ครบแล้ว → ปลดล็อก Step 2
-      if (d.rounds === d.maxMoves) {
-        alert("ครบจำนวนครั้งแล้ว สามารถจบรอบได้");
+      // ✅ ครบแล้ว -> ปลดล็อก step 2
+      if (newRounds >= Number(mm || 18)) {
+        alert("ครบจำนวนหลุมแล้ว สามารถจบรอบได้");
         setStep(2);
       }
     } catch (err) {
       alert(err?.response?.data?.message || "เลือกหลุมไม่สำเร็จ");
+      fetchOccupiedHoles();
     } finally {
       setLoadingHole(false);
     }
   };
 
-  // STEP 2: end round
-  const handleEndRound = async () => {
-    try {
-      setWorking(true);
-      await CaddyService.endRound(bookingId);
-
-      // ✅ จบรอบแล้ว → ไป step 3
-      setStep(3);
-      setIsOnGoing(false);
-    } catch (err) {
-      alert(err?.response?.data?.message || "จบรอบไม่สำเร็จ");
-    } finally {
-      setWorking(false);
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-white flex flex-col px-4 py-6">
+    <div className="min-h-screen bg-white flex flex-col px-4 py-6 relative">
       <Header />
 
-      {/* STEP BAR */}
+      {/* ✅ ปุ่ม “แจ้งปัญหา” ด้านขวาบน */}
+      <div className="absolute top-6 right-6 z-50">
+        <button
+          onClick={() => navigate("/caddy/dashboard/start")}
+          className="bg-black hover:bg-black text-white px-5 py-2 rounded-full shadow-md transition"
+        >
+          แจ้งปัญหา
+        </button>
+      </div>
+
       <div className="mt-6 flex justify-center">
         <div className="flex items-center gap-4">
           {[1, 2, 3].map((i) => (
             <React.Fragment key={i}>
               <div
-                className={`w-9 h-9 flex items-center justify-center rounded-full border-2 ${
+                className={`w-9 h-9 flex items-center justify-center rounded-full border-2 transition-all duration-300 ${
                   step > i
                     ? "bg-green-500 border-green-500 text-white"
                     : step === i
@@ -160,106 +255,196 @@ const ProcessGolfPage = () => {
         </div>
       </div>
 
-      {/* STEP CONTENT */}
-      <div className="mt-10 text-center">
-        <h2 className="text-xl font-semibold">{stepTexts[step - 1]}</h2>
+      <div className="mt-10 flex justify-center">
+        <div className="bg-gradient-to-br from-green-700 to-green-800 text-white rounded-3xl w-full max-w-sm py-8 px-6 text-center shadow-lg">
+          <p className="text-lg font-semibold">{stepTexts[step - 1]}</p>
 
-        {/* STEP 1: Start */}
-        {step === 1 && !isOnGoing && (
-          <button
-            onClick={handleStartRound}
-            disabled={working}
-            className="mt-6 bg-green-600 text-white px-8 py-2 rounded-full"
-          >
-            {working ? "กำลังเริ่ม..." : "เริ่มออกรอบ"}
-          </button>
-        )}
+          {/* ✅ โหมดเลือกหลุม (ยังอยู่ step 1) */}
+          {step === 1 && isOnGoing && (
+            <div className="mt-4 text-left">
+              <div className="text-sm text-white/90 mb-2">
+                เลือกหลุม ({rounds}/{maxMoves}){" "}
+                {loadingOcc ? "(กำลังอัปเดต...)" : ""}
+              </div>
 
-        {/* SELECT HOLE */}
-        {isOnGoing && step === 1 && (
-          <div className="mt-6">
-            <p className="mb-3">
-              เลือกหลุม ({rounds}/{maxMoves})
-            </p>
+              <div className="grid grid-cols-6 gap-2">
+                {Array.from({ length: maxMoves }).map((_, i) => {
+                  const hole = i + 1;
 
-            {/* ✅ แสดง ETA / pace / ช้า */}
-            <div className="mx-auto max-w-sm text-left bg-gray-50 rounded-xl p-4 mb-4">
-              <p className="text-sm">
-                ⏱ Pace ปัจจุบัน: <b>{paceMin}</b> นาที/หลุม
-              </p>
-              <p className="text-sm">
-                ➡️ เวลาโดยประมาณหลุมถัดไป:{" "}
-                <b>{etaNext ? etaNext.toLocaleTimeString() : "-"}</b>
-              </p>
-              {actualPrevMin !== null && (
-                <p className="text-sm">
-                  หลุมก่อนหน้าใช้เวลา: <b>{Number(actualPrevMin).toFixed(1)}</b> นาที
-                </p>
-              )}
-              {isSlow && (
-                <p className="text-sm font-semibold text-red-600 mt-1">
-                  ⚠️ ช้า (หลุมก่อนหน้าเกิน 25 นาที)
-                </p>
+                  // ✅ หลุมที่มีแคดดี้อยู่ -> เทา + กดไม่ได้
+                  const isOccupied = occupiedHoles.has(hole);
+
+                  // ✅ หลุมที่เราอยู่ -> เทา + กดไม่ได้
+                  const isMine = currentHole === hole;
+
+                  const disabled = loadingHole || isOccupied || isMine;
+
+                  return (
+                    <button
+                      key={hole}
+                      disabled={disabled}
+                      onClick={() => handleSelectHole(hole)}
+                      className={`py-2 rounded text-sm font-semibold transition ${
+                        disabled
+                          ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                          : "bg-white text-green-800 hover:bg-green-50"
+                      }`}
+                      title={
+                        isMine
+                          ? "หลุมที่คุณอยู่"
+                          : isOccupied
+                          ? "มีแคดดี้อยู่แล้ว"
+                          : "เลือกหลุม"
+                      }
+                    >
+                      {hole}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {currentHole && (
+                <div className="mt-3 text-sm text-white/90">
+                  หลุมปัจจุบัน: <span className="font-semibold">{currentHole}</span>
+                </div>
               )}
             </div>
+          )}
 
-            <div className="grid grid-cols-6 gap-2">
-              {Array.from({ length: maxMoves }).map((_, i) => {
-                const hole = i + 1;
-
-                // ✅ กติกาใหม่: เลือกซ้ำได้ แต่ห้ามซ้ำติดกัน
-                const disabled =
-                  loadingHole ||
-                  rounds >= maxMoves ||
-                  currentHole === hole;
-
-                return (
-                  <button
-                    key={hole}
-                    disabled={disabled}
-                    onClick={() => handleSelectHole(hole)}
-                    className={`py-2 rounded ${
-                      disabled
-                        ? "bg-gray-300 text-gray-600"
-                        : "bg-green-600 text-white hover:bg-green-700"
-                    }`}
-                    title={currentHole === hole ? "ห้ามเลือกหลุมเดิมซ้ำติดกัน" : ""}
-                  >
-                    {hole}
-                  </button>
-                );
-              })}
-            </div>
-
-            {currentHole && (
-              <p className="mt-4 text-green-700">
-                หลุมปัจจุบัน: {currentHole}
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* STEP 2: End */}
-        {step === 2 && (
+          {/* ✅ ปุ่มยืนยันเดิม: ใช้เริ่ม/จบ/เปลี่ยนแบต */}
           <button
-            onClick={handleEndRound}
+            className={`mt-6 bg-white text-green-800 font-medium text-sm px-8 py-2 rounded-full shadow-md hover:bg-green-50 transition ${
+              working ? "opacity-70 cursor-not-allowed" : ""
+            }`}
+            onClick={() => {
+              if (working) return;
+
+              // ✅ ถ้าเริ่มแล้ว -> ไม่ให้กด "ยืนยัน" ไปเริ่มซ้ำ
+              if (step === 1 && isOnGoing) return;
+
+              if (step === 1) {
+                setShowStartConfirm(true);
+              } else if (step === 2) {
+                setShowEndConfirm(true);
+              } else if (step === 3) {
+                setShowBatteryConfirm(true);
+              }
+            }}
             disabled={working}
-            className="mt-6 bg-green-600 text-white px-8 py-2 rounded-full"
           >
-            {working ? "กำลังจบรอบ..." : "จบการเล่นกอล์ฟ"}
+            {working ? "กำลังดำเนินการ..." : "ยืนยัน"}
           </button>
-        )}
-
-        {/* STEP 3 */}
-        {step === 3 && (
-          <button
-            onClick={() => navigate("/caddy")}
-            className="mt-6 bg-green-600 text-white px-8 py-2 rounded-full"
-          >
-            เสร็จสิ้น
-          </button>
-        )}
+        </div>
       </div>
+
+      <div className="fixed bottom-4 right-4 z-40">
+        <button
+          onClick={() => setShowCancelConfirm(true)}
+          className="bg-orange-500 text-white px-5 py-2 rounded-full shadow-md hover:bg-orange-600 transition"
+        >
+          ยกเลิก
+        </button>
+      </div>
+
+      {showStartConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-6 pb-16">
+          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-full max-w-xs">
+            <p className="text-lg font-semibold mb-4">คุณยืนยันจะเริ่มรอบใช่หรือไม่?</p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowStartConfirm(false)}
+                className="bg-gray-400 hover:bg-gray-500 text-white px-6 py-2 rounded"
+              >
+                ไม่
+              </button>
+              <button
+                onClick={async () => {
+                  setShowStartConfirm(false);
+                  await handleNextStep();
+                }}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded"
+              >
+                ใช่
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEndConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-6 pb-16">
+          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-full max-w-xs">
+            <p className="text-lg font-semibold mb-4">คุณต้องการจบการเล่นกอล์ฟใช่หรือไม่?</p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowEndConfirm(false)}
+                className="bg-gray-400 hover:bg-gray-500 text-white px-6 py-2 rounded"
+              >
+                ไม่
+              </button>
+              <button
+                onClick={async () => {
+                  setShowEndConfirm(false);
+                  await handleNextStep();
+                }}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded"
+              >
+                ใช่
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBatteryConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-6 pb-16">
+          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-full max-w-xs">
+            <p className="text-lg font-semibold mb-4">ยืนยันว่าเปลี่ยนแบตรถกอล์ฟสำเร็จ?</p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowBatteryConfirm(false)}
+                className="bg-gray-400 hover:bg-gray-500 text-white px-6 py-2 rounded"
+              >
+                ไม่
+              </button>
+              <button
+                onClick={async () => {
+                  setShowBatteryConfirm(false);
+                  await handleNextStep();
+                }}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded"
+              >
+                ใช่
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCancelConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[80%] max-w-xs">
+            <p className="text-lg font-semibold mb-4">คุณแน่ใจหรือไม่?</p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => {
+                  setShowCancelConfirm(false);
+                  navigate("/caddy");
+                }}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded"
+              >
+                ตกลง
+              </button>
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

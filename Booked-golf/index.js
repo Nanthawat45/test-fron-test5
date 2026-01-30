@@ -33,10 +33,13 @@ app.use(cors({
 app.use("/api/stripe", StripeRoute);  
 app.use(express.json());  
 
-app.use((req, _res, next) => {
-  console.log("REQ", req.method, req.originalUrl);
-  next();
-});
+if (process.env.NODE_ENV !== "production") {
+  app.use((req, _res, next) => {
+    console.log("REQ", req.method, req.originalUrl);
+    next();
+  });
+}
+
 
 app.use("/api/booking", BookingRoute);
 app.use("/api/user", UserRoute);

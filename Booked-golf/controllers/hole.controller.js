@@ -1,6 +1,8 @@
 import Hole from "../models/Hole.js";
 import Item from "../models/Item.js";
 import CaddyHoleHistory from "../models/CaddyHoleHistory.js";
+import Booking from "../models/Booking.js";
+import Caddy from "../models/Caddy.js";
 import mongoose from "mongoose";
 
 export const close = async (req, res) => {
@@ -103,22 +105,17 @@ export const report = async (req, res) => {
 
 export const getHoles = async (req, res) => {
   try {
-    // 1) เตรียม 18 หลุมว่าง
     const holes = Array.from({ length: 18 }).map((_, i) => ({
       holeNumber: i + 1,
       occupied: false,
-
       bookingId: null,
       groupName: "",
       golfCarQty: 0,
       golfBagQty: 0,
-
-      // ✅ รายชื่อแคดดี้ในหลุม + เวลาเริ่มหลุม
-      caddiesInHole: [], // [{ caddyId, name, startedAt }]
-      startedAtMin: null, // เวลาเริ่มที่เร็วสุดในหลุมนี้
+      caddiesInHole: [],
+      startedAtMin: null,
     }));
 
-    // 2) ดึง caddy ที่มี booking + มี currentHole (ตามที่คุณเลือก: เอาหมด ถ้ามี activeBookingId)
     const caddies = await Caddy.find({
       activeBookingId: { $ne: null },
       currentHole: { $ne: null },
@@ -126,11 +123,15 @@ export const getHoles = async (req, res) => {
       .select("caddy_id name activeBookingId currentHole")
       .lean();
 
-    if (!caddies.length) return res.json(holes);
+    if (!caddies?.length) return res.json(holes);
 
-    // 3) ดึง booking ที่เกี่ยวข้อง (groupName + golfCar/golfBag)
     const bookingIds = [
-      ...new Set(caddies.map((c) => String(c.activeBookingId)).filter(Boolean)),
+      ...new Set(
+        caddies
+          .map((c) => c.activeBookingId)
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)))
+          .map((id) => String(id))
+      ),
     ].map((id) => new mongoose.Types.ObjectId(id));
 
     const bookings = await Booking.find({ _id: { $in: bookingIds } })
@@ -139,37 +140,43 @@ export const getHoles = async (req, res) => {
 
     const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
 
-    // 4) ดึง history ล่าสุดที่ยังไม่ปิด (leftAt=null) เพื่อเอา enteredAt เป็น startedAt
     const caddyUserIds = [
-      ...new Set(caddies.map((c) => String(c.caddy_id)).filter(Boolean)),
+      ...new Set(
+        caddies
+          .map((c) => c.caddy_id)
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)))
+          .map((id) => String(id))
+      ),
     ].map((id) => new mongoose.Types.ObjectId(id));
 
-    const latestOpen = await CaddyHoleHistory.aggregate([
-      {
-        $match: {
-          caddyId: { $in: caddyUserIds },
-          bookingId: { $in: bookingIds },
-          leftAt: null,
-        },
-      },
-      { $sort: { enteredAt: -1 } },
-      {
-        $group: {
-          _id: { caddyId: "$caddyId", bookingId: "$bookingId" },
-          enteredAt: { $first: "$enteredAt" },
-          holeNumber: { $first: "$holeNumber" },
-          order: { $first: "$order" },
-        },
-      },
-    ]);
+    let startedAtMap = new Map();
 
-    const startedAtMap = new Map();
-    for (const r of latestOpen) {
-      const key = `${String(r._id.caddyId)}|${String(r._id.bookingId)}`;
-      startedAtMap.set(key, r.enteredAt || null);
+    if (caddyUserIds.length) {
+      const latestOpen = await CaddyHoleHistory.aggregate([
+        {
+          $match: {
+            caddyId: { $in: caddyUserIds },
+            bookingId: { $in: bookingIds },
+            leftAt: null,
+          },
+        },
+        { $sort: { enteredAt: -1 } },
+        {
+          $group: {
+            _id: { caddyId: "$caddyId", bookingId: "$bookingId" },
+            enteredAt: { $first: "$enteredAt" },
+          },
+        },
+      ]);
+
+      startedAtMap = new Map(
+        latestOpen.map((r) => [
+          `${String(r._id.caddyId)}|${String(r._id.bookingId)}`,
+          r.enteredAt || null,
+        ])
+      );
     }
 
-    // 5) ใส่ข้อมูลลงหลุม
     for (const c of caddies) {
       const holeNum = Number(c.currentHole);
       if (!Number.isFinite(holeNum) || holeNum < 1 || holeNum > 18) continue;
@@ -180,7 +187,6 @@ export const getHoles = async (req, res) => {
 
       holes[idx].occupied = true;
 
-      // ตั้ง snapshot booking ครั้งแรกของหลุมนี้
       if (!holes[idx].bookingId && b) {
         holes[idx].bookingId = bookingIdStr;
         holes[idx].groupName = b.groupName || "";
@@ -194,7 +200,7 @@ export const getHoles = async (req, res) => {
       holes[idx].caddiesInHole.push({
         caddyId: String(c.caddy_id),
         name: c.name || "Caddy",
-        startedAt, // ✅ เวลาเริ่มหลุม
+        startedAt,
       });
 
       if (startedAt) {
@@ -206,7 +212,7 @@ export const getHoles = async (req, res) => {
     return res.json(holes);
   } catch (err) {
     console.error("getHoles error:", err);
-    return res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error", detail: err?.message });
   }
 };
 

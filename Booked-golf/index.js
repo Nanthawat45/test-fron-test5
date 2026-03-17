@@ -40,7 +40,6 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-
 app.use("/api/booking", BookingRoute);
 app.use("/api/user", UserRoute);
 app.use("/api/item", ItemRoute);

@@ -105,17 +105,33 @@ export const report = async (req, res) => {
 
 export const getHoles = async (req, res) => {
   try {
-    const holes = Array.from({ length: 18 }).map((_, i) => ({
-      holeNumber: i + 1,
-      occupied: false,
-      bookingId: null,
-      groupName: "",
-      golfCarQty: 0,
-      golfBagQty: 0,
-      caddiesInHole: [],
-      startedAtMin: null,
-    }));
+    // ✅ 1. ดึงข้อมูลสถานะหลุมจาก Collection 'Hole' ใน Database
+    const dbHoles = await Hole.find().lean();
+    const holeStatusMap = new Map(dbHoles.map((h) => [h.holeNumber, h]));
 
+    // ✅ 2. สร้าง Array 18 หลุม โดยดึง status จาก DB มาใส่ด้วย
+    const holes = Array.from({ length: 18 }).map((_, i) => {
+      const holeNum = i + 1;
+      const dbData = holeStatusMap.get(holeNum) || {}; // ดึงข้อมูลถ้าเคยมีการบันทึกไว้
+
+      return {
+        holeNumber: holeNum,
+        status: dbData.status || "open", // <--- ตัวแปรสำคัญที่ทำให้สีเปลี่ยน
+        description: dbData.description || "",
+        occupied: false,
+        bookingId: null,
+        groupName: "",
+        golfCarQty: 0,
+        golfBagQty: 0,
+        caddiesInHole: [],
+        caddyReports: dbData.caddyReports || [], // เผื่อหน้าบ้านเรียกใช้
+        startedAtMin: null,
+      };
+    });
+
+    // ==========================================
+    // โค้ดด้านล่างนี้คือของเดิมของคุณทั้งหมด (ไม่เปลี่ยน)
+    // ==========================================
     const caddies = await Caddy.find({
       activeBookingId: { $ne: null },
       currentHole: { $ne: null },
@@ -357,5 +373,43 @@ export const resolveGoCar = async (req, res) => {
     session.endSession();
     console.error("resolveGoCar error:", error);
     return res.status(500).json({ message: "เกิดข้อผิดพลาดขณะดำเนินการสลับรถ" });
+  }
+};
+
+export const getAllHoles = async (req, res) => {
+  try {
+    // 1. ดึงข้อมูลหลุมทั้งหมดจากฐานข้อมูล (เรียงตามเลขหลุม)
+    const dbHoles = await Hole.find().sort({ holeNumber: 1 }).lean();
+
+    // 2. สร้าง Array ให้ครบ 18 หลุมเสมอ (กันเหนียวเผื่อบางหลุมยังไม่มีใน DB)
+    const allHoles = Array.from({ length: 18 }, (_, index) => {
+      const holeNum = index + 1;
+      
+      // หาว่าใน DB มีข้อมูลของหลุมนี้ไหม
+      const foundHole = dbHoles.find((h) => h.holeNumber === holeNum);
+
+      // ถ้ามี คืนค่าข้อมูลจาก DB ไปเลย (รวมถึง status ด้วย)
+      if (foundHole) {
+        return foundHole;
+      }
+
+      // ถ้ายังไม่มี คืนค่า Default เป็นสถานะ open
+      return {
+        holeNumber: holeNum,
+        status: "open", // จะได้โชว์การ์ดสีเขียวปกติ
+        groupName: "",
+        caddyReports: [],
+        golfCarQty: 0,
+        golfBagQty: 0,
+        description: "",
+      };
+    });
+
+    // 3. ส่งกลับไปให้หน้าเว็บ
+    res.status(200).json(allHoles);
+    
+  } catch (error) {
+    console.error("Error fetching holes:", error);
+    res.status(500).json({ message: "ไม่สามารถดึงข้อมูลสถานะหลุมได้", error: error.message });
   }
 };

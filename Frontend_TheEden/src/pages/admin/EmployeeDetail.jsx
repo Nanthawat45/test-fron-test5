@@ -13,26 +13,24 @@ export default function EmployeeDetail() {
 
   // ✅ โหลดข้อมูลพนักงานตาม ID
   useEffect(() => {
-  const loadEmployee = async () => {
-    try {
-      const res = await UserService.getUserById(id);
-      // รองรับทั้งกรณีมี data ซ้อน และส่ง object ตรง
-      const userData = res.data?.data || res.data;
+    const loadEmployee = async () => {
+      try {
+        const res = await UserService.getUserById(id);
+        const userData = res.data?.data || res.data;
 
-      if (userData && userData._id) {
-        setFormData(userData);
-      } else {
-        console.error("ไม่พบข้อมูลพนักงาน:", res.data);
+        if (userData && userData._id) {
+          setFormData(userData);
+        } else {
+          console.error("ไม่พบข้อมูลพนักงาน:", res.data);
+          setFormData(null);
+        }
+      } catch (err) {
+        console.error("Load employee failed:", err);
         setFormData(null);
       }
-    } catch (err) {
-      console.error("Load employee failed:", err);
-      setFormData(null);
-    }
-  };
-  loadEmployee();
-}, [id]);
-
+    };
+    loadEmployee();
+  }, [id]);
 
   if (!formData) return <div className="p-5">Loading...</div>;
 
@@ -54,7 +52,7 @@ export default function EmployeeDetail() {
     fileInputRef.current.click();
   };
 
-  // ✅ บันทึกข้อมูล (PUT /user/updateuser/:id)
+  // ✅ บันทึกข้อมูล
   const handleSave = async () => {
     try {
       const data = new FormData();
@@ -62,6 +60,7 @@ export default function EmployeeDetail() {
       data.append("email", formData.email);
       data.append("phone", formData.phone);
       data.append("role", formData.role);
+
       if (formData.image instanceof File) {
         data.append("image", formData.image);
       }
@@ -75,14 +74,31 @@ export default function EmployeeDetail() {
     }
   };
 
-  // ✅ UI render field
+  // ✅ ลบพนักงาน
+  const handleDelete = async () => {
+    const confirmDelete = window.confirm(
+      "⚠️ คุณแน่ใจหรือไม่ว่าต้องการลบพนักงานคนนี้?\n\nหากลบแล้วจะไม่สามารถกู้ข้อมูลพนักงานกลับมาได้"
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      await UserService.deleteUser(id);
+      alert("ลบพนักงานสำเร็จ ✅");
+      navigate("/admin");
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("ลบพนักงานไม่สำเร็จ ❌");
+    }
+  };
+
+  // ✅ render field
   const renderField = (label, key) => (
     <div>
       <p className="text-sm font-semibold text-gray-600 mb-1">{label}</p>
 
       {isEditing ? (
         key === "role" ? (
-          // ✅ ถ้า key เป็น role ให้แสดง SELECT
           <select
             value={formData[key] || ""}
             onChange={(e) => handleChange(key, e.target.value)}
@@ -117,7 +133,8 @@ export default function EmployeeDetail() {
       </button>
 
       <div className="flex flex-col md:flex-row gap-10">
-        {/* ✅ รูปภาพ */}
+
+        {/* รูปภาพ */}
         <div className="flex-shrink-0 text-center">
           <img
             src={
@@ -147,8 +164,9 @@ export default function EmployeeDetail() {
           )}
         </div>
 
-        {/* ✅ ฟอร์ม */}
+        {/* ฟอร์ม */}
         <div className="flex-1 space-y-8">
+
           <section>
             <h2 className="text-xl font-bold text-gray-700 mb-3 border-b pb-1 text-center">
               ข้อมูลส่วนตัว
@@ -177,7 +195,9 @@ export default function EmployeeDetail() {
             </div>
           </section>
 
+          {/* ปุ่ม */}
           <div className="pt-4 flex gap-4 flex-wrap">
+
             {isEditing ? (
               <>
                 <button
@@ -186,6 +206,7 @@ export default function EmployeeDetail() {
                 >
                   บันทึกการเปลี่ยนแปลง
                 </button>
+
                 <button
                   onClick={() => setIsEditing(false)}
                   className="px-6 py-2 bg-gray-400 text-white font-medium rounded-lg hover:bg-gray-500 shadow"
@@ -194,13 +215,23 @@ export default function EmployeeDetail() {
                 </button>
               </>
             ) : (
-              <button
-                onClick={() => setIsEditing(true)}
-                className="px-6 py-2 bg-green-800 text-white font-medium rounded-lg hover:bg-green-800 shadow"
-              >
-                แก้ไขข้อมูล
-              </button>
+              <>
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="px-6 py-2 bg-green-800 text-white font-medium rounded-lg hover:bg-green-900 shadow"
+                >
+                  แก้ไขข้อมูล
+                </button>
+
+                <button
+                  onClick={handleDelete}
+                  className="px-6 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 shadow"
+                >
+                  ลบพนักงาน
+                </button>
+              </>
             )}
+
           </div>
         </div>
       </div>

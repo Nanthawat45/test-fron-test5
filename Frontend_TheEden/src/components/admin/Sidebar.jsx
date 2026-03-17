@@ -6,7 +6,7 @@ export default function Sidebar({ activePage, setActivePage }) {
     <aside className="w-55 bg-white border-r p-4">
       <div className="mb-10">
         <img
-          src="/Images/eden-Logo.png"
+          src="/images/eden-Logo.png"
           alt="Logo"
           className=" mx-auto h-20 mb-1 "
         />

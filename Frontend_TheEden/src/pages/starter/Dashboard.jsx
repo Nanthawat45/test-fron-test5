@@ -110,7 +110,7 @@ useEffect(() => {
     className={`px-6 py-2 rounded-full font-semibold text-white
       ${!selectedDate || loading ? "bg-gray-400 cursor-not-allowed" : "bg-black hover:bg-gray-800"}`}
   >
-    ดูตามวันที่
+    ยืนยัน
   </button>
 
   <button

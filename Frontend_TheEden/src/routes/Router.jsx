@@ -20,7 +20,8 @@ import AdminDashboard from "../pages/admin/AdminDashboard.jsx";
 import BookingTable from "../pages/admin/BookingTable.jsx";
 import EmployeeDetail from "../pages/admin/EmployeeDetail.jsx";
 import EmployeeForm from "../pages/admin/EmployeeForm.jsx";
-import EmployeePage from "../components/admin/EmployeePage.jsx";
+import EmployeePage from "../pages/admin/EmployeePage";
+import UserDetail from "../pages/admin/UserDetail";
 
 // Starter
 import StarterLayout from "../layout/starterLayout.jsx";
@@ -120,6 +121,7 @@ const Router = createBrowserRouter([
       { path: "booking", element: <BookingTable /> },
       { path: "add", element: <EmployeeForm /> },
       { path: "detail/:id", element: <EmployeeDetail /> },
+      { path: "/admin/user/:id", element: <UserDetail /> }              
     ],
   },
 

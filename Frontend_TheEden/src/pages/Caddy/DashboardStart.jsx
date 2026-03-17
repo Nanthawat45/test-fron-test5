@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faExclamation } from "@fortawesome/free-solid-svg-icons";
+import { faExclamation, faRotateRight } from "@fortawesome/free-solid-svg-icons";
 import { faCircleCheck } from "@fortawesome/free-regular-svg-icons";
 import api from "../../service/api";
 
@@ -21,7 +21,7 @@ function stableStringify(obj) {
   }
 }
 
-const DashboardStart = () => {
+const Dashboard = () => {
   const navigate = useNavigate();
 
   const [holeStatuses, setHoleStatuses] = useState([]);
@@ -31,9 +31,34 @@ const DashboardStart = () => {
   const [confirmData, setConfirmData] = useState(null);
   const [popup, setPopup] = useState(null);
 
+  const [holeLimit, setHoleLimit] = useState(18);
+
+  // ✅ กันการรีเฟรชตอนกำลังกรอกฟอร์ม (แก้ปัญหาพิมพ์แล้วหาย)
+  const [isEditingForm, setIsEditingForm] = useState(false);
+  const editingTimeoutRef = useRef(null);
+
+  const markEditing = () => {
+    setIsEditingForm(true);
+    if (editingTimeoutRef.current) clearTimeout(editingTimeoutRef.current);
+    // ถ้าหยุดพิมพ์ 2 วิ ค่อยถือว่าไม่ได้แก้แล้ว
+    editingTimeoutRef.current = setTimeout(() => {
+      setIsEditingForm(false);
+    }, 2000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (editingTimeoutRef.current) clearTimeout(editingTimeoutRef.current);
+    };
+  }, []);
+
+  // ✅ ช่วยลดการ setState ถ้าข้อมูลเหมือนเดิม
   const prevSignatureRef = useRef("");
 
   const fetchHoleStatuses = async ({ force = false } = {}) => {
+    // ถ้ากำลังกรอกฟอร์มอยู่ → ไม่ดึง (กันรีเซ็ต)
+    if (!force && isEditingForm) return;
+
     setLoadingHoles(true);
     setHolesError(null);
 
@@ -56,16 +81,27 @@ const DashboardStart = () => {
             h.status === "help_car" ? "ขอรถกอล์ฟช่วย" : "สลับรถแล้ว";
         }
 
+        const caddyHere = (h.caddyReports || [])
+          .map((r) => r?.caddyName)
+          .filter(Boolean);
+
         return {
-          number: h.holeNumber ?? h.number ?? h?._id?.slice(-2),
+          number: Number(h.holeNumber),
           color: displayColor,
           status: displayStatus,
+          groupName: h.groupName || "",
+          caddyHere,
+          golfCarQty: Number(h.golfCarQty || 0),
+          golfBagQty: Number(h.golfBagQty || 0),
         };
       });
 
+      // ✅ setState เฉพาะตอนข้อมูลเปลี่ยนจริง
       const signature = stableStringify(formatted);
-      if (!force && signature === prevSignatureRef.current) return;
-
+      if (!force && signature === prevSignatureRef.current) {
+        // ข้อมูลเหมือนเดิม → ไม่ต้อง setHoleStatuses (ลดรีเรนเดอร์)
+        return;
+      }
       prevSignatureRef.current = signature;
       setHoleStatuses(formatted);
     } catch (err) {
@@ -82,12 +118,17 @@ const DashboardStart = () => {
   };
 
   useEffect(() => {
+    // ✅ โหลดครั้งแรกเท่านั้น (เอา interval ออก)
     fetchHoleStatuses({ force: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const askHoleAction = (title, payload) => {
-    setConfirmData({ title, payload });
+    setConfirmData({
+      scope: "hole",
+      title,
+      payload,
+    });
   };
 
   const handleConfirm = async () => {
@@ -126,6 +167,66 @@ const DashboardStart = () => {
     }
   };
 
+  const renderPopup = () => {
+    if (confirmData) {
+      return (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[60%] max-w-xs">
+            <FontAwesomeIcon
+              icon={faExclamation}
+              className="text-yellow-400 mb-4"
+              style={{ fontSize: 48 }}
+            />
+            <h3 className="text-lg font-semibold mb-4">คุณแน่ใจหรือไม่?</h3>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={handleConfirm}
+                className="bg-green-600 text-white px-6 py-2 rounded-full hover:bg-green-700"
+              >
+                ตกลง
+              </button>
+              <button
+                onClick={() => setConfirmData(null)}
+                className="bg-red-600 text-white px-6 py-2 rounded-full hover:bg-red-700"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (popup) {
+      return (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[70%] max-w-xs space-y-4">
+            <FontAwesomeIcon
+              icon={popup.isError ? faExclamation : faCircleCheck}
+              className={
+                popup.isError
+                  ? "text-red-500 mx-auto"
+                  : "text-green-500 mx-auto"
+              }
+              style={{ fontSize: 48 }}
+            />
+            <h2 className="text-3xl font-extrabold">
+              {popup.isError ? "เกิดข้อผิดพลาด!" : "สำเร็จ!"}
+            </h2>
+            <h3 className="text-base font-normal text-gray-800">{popup.title}</h3>
+            <button
+              onClick={() => setPopup(null)}
+              className="mt-4 bg-gray-500 text-white px-6 py-2 rounded-full hover:bg-green-600"
+            >
+              ตกลง
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
   const HoleCard = ({ color, title, ask, showName, showIssue }) => {
     const [holeNumber, setHoleNumber] = useState("");
     const [name, setName] = useState("");
@@ -149,7 +250,10 @@ const DashboardStart = () => {
         <input
           type="text"
           value={holeNumber}
-          onChange={(e) => setHoleNumber(e.target.value)}
+          onChange={(e) => {
+            setHoleNumber(e.target.value);
+            markEditing();
+          }}
           className="w-20 mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-center text-sm"
           placeholder="เลขหลุม"
         />
@@ -160,7 +264,10 @@ const DashboardStart = () => {
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                markEditing();
+              }}
               className="w-full mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
               placeholder="ระบุจำนวน"
             />
@@ -172,7 +279,10 @@ const DashboardStart = () => {
             <label className="block mb-1 font-medium text-sm">เลือกปัญหา</label>
             <select
               value={issue}
-              onChange={(e) => setIssue(e.target.value)}
+              onChange={(e) => {
+                setIssue(e.target.value);
+                markEditing();
+              }}
               className="w-full mb-3 px-2 py-1 border border-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
             >
               <option value="" disabled>
@@ -221,11 +331,33 @@ const DashboardStart = () => {
           &lt; ย้อนกลับ
         </button>
 
+        {/* ✅ ปุ่ม Refresh เอง */}
         <button
           onClick={() => fetchHoleStatuses({ force: true })}
-          className="px-4 py-2 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold"
+          className="flex items-center gap-2 px-4 py-2 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold"
         >
+          <FontAwesomeIcon icon={faRotateRight} />
           รีเฟรช
+        </button>
+      </div>
+
+      <div className="flex justify-center gap-4 mb-4">
+        <button
+          onClick={() => setHoleLimit(9)}
+          className={`px-6 py-2 rounded-full font-semibold ${
+            holeLimit === 9 ? "bg-green-600 text-white" : "bg-gray-200"
+          }`}
+        >
+          9 หลุม
+        </button>
+
+        <button
+          onClick={() => setHoleLimit(18)}
+          className={`px-6 py-2 rounded-full font-semibold ${
+            holeLimit === 18 ? "bg-green-600 text-white" : "bg-gray-200"
+          }`}
+        >
+          18 หลุม
         </button>
       </div>
 
@@ -241,20 +373,22 @@ const DashboardStart = () => {
             <HoleCard
               title="แจ้งปิดหลุม"
               color="red"
+              showName={false}
               showIssue={true}
               ask={askHoleAction}
             />
-
             <HoleCard
               title="แจ้งเปิดใช้งานหลุม"
               color="green"
+              showName={false}
+              showIssue={false}
               ask={askHoleAction}
             />
-
             <HoleCard
               title="ขอรถกอล์ฟช่วย"
               color="orange"
               showName={true}
+              showIssue={false}
               ask={askHoleAction}
             />
           </div>
@@ -274,96 +408,60 @@ const DashboardStart = () => {
           <div className="text-center text-lg text-red-600 py-10">{holesError}</div>
         ) : (
           <div className="border-2 border-gray-400 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 shadow-md bg-white">
-            {holeStatuses.filter((h) => h.color !== "green").length > 0 ? (
-              holeStatuses
-                .filter((h) => h.color !== "green")
-                .map((h) => (
+            {holeStatuses
+              .filter((h) => Number(h.number) <= holeLimit)
+              .map((h) => (
+                <div
+                  key={h.number}
+                  className="border rounded-lg p-2 bg-white shadow-sm text-center"
+                >
                   <div
-                    key={h.number}
-                    className="border rounded-lg p-2 bg-white shadow-sm text-center transform hover:scale-105 transition-transform duration-200"
+                    className={`text-xs font-semibold px-2 py-0.5 mb-2 rounded-full text-white ${colorMap[h.color]}`}
                   >
-                    <div
-                      className={`text-xs font-semibold px-2 py-0.5 mb-2 rounded-full text-white ${
-                        colorMap[h.color] || "bg-gray-400"
-                      }`}
-                    >
-                      หลุมที่ {h.number}
-                    </div>
-
-                    <div className="w-10 h-10 mx-auto mb-2 rounded-full flex items-center justify-center border border-gray-300 shadow-inner bg-white">
-                      <div
-                        className={`w-6 h-6 rounded-full ${
-                          colorMap[h.color] || "bg-gray-400"
-                        }`}
-                      />
-                    </div>
-
-                    <div className="text-xs text-gray-700 truncate">{h.status}</div>
+                    หลุมที่ {h.number}
                   </div>
-                ))
-            ) : (
-              <div className="col-span-full text-center text-gray-500 py-10">
-                ไม่พบข้อมูลสถานะหลุมกอล์ฟ
-              </div>
-            )}
+
+                  <div className="w-10 h-10 mx-auto mb-2 rounded-full flex items-center justify-center border">
+                    <div className={`w-6 h-6 rounded-full ${colorMap[h.color]}`} />
+                  </div>
+
+                  <div className="text-xs text-gray-700 truncate">{h.status}</div>
+
+                  {h.groupName ? (
+                    <div className="mt-1 text-[11px] font-semibold text-gray-900 truncate">
+                      กลุ่ม: {h.groupName}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-gray-400">กลุ่ม: -</div>
+                  )}
+
+                  {h.caddyHere?.length ? (
+                    <div className="mt-1 text-[11px] text-gray-700">
+                      อยู่ในหลุม: {h.caddyHere.slice(0, 2).join(", ")}
+                      {h.caddyHere.length > 2
+                        ? ` (+${h.caddyHere.length - 2})`
+                        : ""}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-gray-400">
+                      อยู่ในหลุม: -
+                    </div>
+                  )}
+
+                  {h.golfCarQty || h.golfBagQty ? (
+                    <div className="mt-1 text-[11px] text-gray-600">
+                      รถ: {h.golfCarQty} • ถุง: {h.golfBagQty}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
           </div>
         )}
       </section>
 
-      {confirmData && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[60%] max-w-xs">
-            <FontAwesomeIcon
-              icon={faExclamation}
-              className="text-yellow-400 mb-4"
-              style={{ fontSize: 48 }}
-            />
-            <h3 className="text-lg font-semibold mb-4">คุณแน่ใจหรือไม่?</h3>
-            <div className="flex justify-center gap-4">
-              <button
-                onClick={handleConfirm}
-                className="bg-green-600 text-white px-6 py-2 rounded-full hover:bg-green-700"
-              >
-                ตกลง
-              </button>
-              <button
-                onClick={() => setConfirmData(null)}
-                className="bg-red-600 text-white px-6 py-2 rounded-full hover:bg-red-700"
-              >
-                ยกเลิก
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {popup && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-3xl shadow-md text-center w-[70%] max-w-xs space-y-4">
-            <FontAwesomeIcon
-              icon={popup.isError ? faExclamation : faCircleCheck}
-              className={
-                popup.isError
-                  ? "text-red-500 mx-auto"
-                  : "text-green-500 mx-auto"
-              }
-              style={{ fontSize: 48 }}
-            />
-            <h2 className="text-3xl font-extrabold">
-              {popup.isError ? "เกิดข้อผิดพลาด!" : "สำเร็จ!"}
-            </h2>
-            <h3 className="text-base font-normal text-gray-800">{popup.title}</h3>
-            <button
-              onClick={() => setPopup(null)}
-              className="mt-4 bg-gray-500 text-white px-6 py-2 rounded-full hover:bg-green-600"
-            >
-              ตกลง
-            </button>
-          </div>
-        </div>
-      )}
+      {renderPopup()}
     </div>
   );
 };
 
-export default DashboardStart;
+export default Dashboard;

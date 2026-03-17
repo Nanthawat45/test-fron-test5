@@ -8,6 +8,11 @@ const getAllUsers = () => api.get(`${USER_API}/all`);
 // ดึงรายชื่อพนักงาน (ที่ไม่ใช่ user ทั่วไป) (GET /user/allnotuser)
 const getAllNotUser = () => api.get(`${USER_API}/allnotuser`);
 
+
+const getAllGolfer = () => api.get(`${USER_API}/allgolfer`);
+
+const deleteUser = (id) => api.delete(`${USER_API}/deleteuser/${id}`);
+
 // ดึงโปรไฟล์ของตัวเอง (GET /user/profile)
 const getUserProfile = () => api.get(`${USER_API}/profile`);
 
@@ -38,6 +43,7 @@ const logoutUser = () => api.post(`${USER_API}/logout`);
 const UserService = {
   getAllUsers,
   getAllNotUser,
+  getAllGolfer,
   getUserProfile,
   getUserById,
   registerUser,
@@ -45,6 +51,7 @@ const UserService = {
   updateUser,
   loginUser,
   logoutUser,
+  deleteUser,
 };
 
 export default UserService;

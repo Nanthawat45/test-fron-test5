@@ -9,7 +9,8 @@ import {
     getUserById,
     updateUser,
     getAllNotUser,
-    getAllGolfer
+    getAllGolfer,
+    deleteUser
 } from "../controllers/user.Controller.js";
 import { protect, authorizeRoles } from '../middleware/auth.Middleware.js';
 import { upload, uploadToFirebase } from "../middleware/file.middleware.js";
@@ -26,5 +27,6 @@ router.get("/getbyiduser/:id", protect, getUserById);
 router.put("/updateuser/:id", protect, upload, uploadToFirebase, updateUser);
 router.get("/allnotuser", protect, authorizeRoles('admin'), getAllNotUser);
 router.get("/allgolfer", protect, authorizeRoles('admin'), getAllGolfer);
+router.delete("/deleteuser/:id", protect, authorizeRoles('admin'), deleteUser);
 
 export default router;
